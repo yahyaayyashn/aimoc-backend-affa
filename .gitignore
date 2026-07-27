@@ -1,0 +1,32 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+tmp/
+
+# Test & coverage
+*.test
+*.out
+coverage.*
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Generated uploads
+uploads/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+dump-aimoc-aimoc-202606101555.sql

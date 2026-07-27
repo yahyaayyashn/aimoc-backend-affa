@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS invoices;
+DROP TABLE IF EXISTS surat_jalan;
+DROP TABLE IF EXISTS loading_logs;
+DROP TABLE IF EXISTS gate_logs;

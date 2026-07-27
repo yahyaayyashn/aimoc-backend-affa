@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS shifts;
+DROP TABLE IF EXISTS system_settings;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS alerts;

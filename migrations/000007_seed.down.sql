@@ -1,0 +1,9 @@
+DELETE FROM system_settings;
+DELETE FROM shifts;
+DELETE FROM cameras;
+DELETE FROM vendors;
+DELETE FROM materials;
+DELETE FROM users;
+DELETE FROM role_permissions;
+DELETE FROM permissions;
+DELETE FROM roles;
