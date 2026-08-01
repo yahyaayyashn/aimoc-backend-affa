@@ -7,6 +7,7 @@ import (
 
 	"aimoc-backend/internal/domain"
 	"aimoc-backend/internal/middleware"
+	"aimoc-backend/internal/service"
 	wshub "aimoc-backend/internal/websocket"
 	"aimoc-backend/pkg/utils"
 
@@ -140,6 +141,41 @@ func (h *MiscHandler) getOperationalHours() operationalHours {
 // HEARTBEAT_INTERVAL_SEC di ai-service); kamera dianggap offline kalau last_seen_at
 // lebih basi dari ini (network putus / pipeline mati), bukan sekadar idle.
 const heartbeatOfflineThresholdSec = 90
+
+// getRevenuePerTruck — dulu hardcoded (const RevenuePerTruck), dipindah ke
+// system_settings (01 Agu 2026) supaya bisa diubah tanpa deploy ulang. Default tetap
+// Rp250.000 (keputusan tim 23 Jul 2026) kalau key belum pernah di-set.
+func (h *MiscHandler) getRevenuePerTruck() float64 {
+	v := 250000.0
+	var raw string
+	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'REVENUE_PER_TRUCK'`).Scan(&raw)
+	if raw == "" {
+		return v
+	}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v <= 0 {
+		return 250000.0
+	}
+	return v
+}
+
+// getTruckGroupGapSec — dulu hardcoded (service.TruckGroupGapSec), dipindah ke
+// system_settings (01 Agu 2026). Default tetap 300s/5 menit. Ubah nilai ini mengubah
+// klasifikasi Overload/Underload/Unvalidated -- bukan cuma angka harga, lihat
+// truck_grouping.go.
+func (h *MiscHandler) getTruckGroupGapSec() int {
+	v := service.TruckGroupGapSec
+	var raw string
+	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'TRUCK_GROUP_GAP_SEC'`).Scan(&raw)
+	if raw == "" {
+		return v
+	}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v <= 0 {
+		return service.TruckGroupGapSec
+	}
+	return v
+}
 
 // DashboardManajemen — ringkasan aktivitas excavator hari ini, bersumber murni dari
 // loading_cycles (deteksi AI mandiri) + alerts + heartbeat kamera. Metrik transaksi

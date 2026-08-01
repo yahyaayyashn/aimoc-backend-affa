@@ -12,9 +12,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// RevenuePerTruck — Rp250.000 per truk penuh (flat, bukan per m3), keputusan tim 23
-// Juli 2026 (lihat Dokumen_Penjelasan_Dashboard_AIMOC.pdf).
-const RevenuePerTruck = 250000
+// Revenue per truk (dulu const RevenuePerTruck=250000, keputusan tim 23 Jul 2026) kini
+// disimpan di system_settings key REVENUE_PER_TRUCK -- lihat (*MiscHandler).getRevenuePerTruck
+// di misc.go, default tetap Rp250.000 kalau key belum di-set.
 
 type produktivitasExcavatorRow struct {
 	ExcavatorID     string  `json:"excavator_id"`
@@ -99,10 +99,12 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 
 	now := time.Now()
 	resp := produktivitasRevenueResp{}
+	revenuePerTruck := h.getRevenuePerTruck()
+	gapSec := h.getTruckGroupGapSec()
 
 	for _, exc := range excavators {
 		excEvents := eventsByExc[exc.ID.String()]
-		groups := service.ComputeTruckGroups(excEvents, exc.StandardBuckets, service.TruckGroupGapSec, now)
+		groups := service.ComputeTruckGroups(excEvents, exc.StandardBuckets, gapSec, now)
 
 		row := produktivitasExcavatorRow{
 			ExcavatorID:   exc.ID.String(),
@@ -128,7 +130,7 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 			}
 			if g.IsIdentified() {
 				row.TruckIdentified++
-				logRow.Revenue = RevenuePerTruck
+				logRow.Revenue = revenuePerTruck
 			}
 			if g.Unvalidated {
 				resp.UnvalidatedVolumeM3 += g.BucketCount
@@ -146,8 +148,8 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 			}
 			resp.LogAktivitas = append(resp.LogAktivitas, logRow)
 		}
-		row.RevenueTercatat = float64(row.TruckIdentified) * RevenuePerTruck
-		row.EstimasiRevenue = math.Ceil(float64(row.VolumeM3)/float64(standard)) * RevenuePerTruck
+		row.RevenueTercatat = float64(row.TruckIdentified) * revenuePerTruck
+		row.EstimasiRevenue = math.Ceil(float64(row.VolumeM3)/float64(standard)) * revenuePerTruck
 
 		resp.ProduktivitasLoadingM3 += row.VolumeM3
 		resp.TruckIdentified += row.TruckIdentified
@@ -230,7 +232,7 @@ func (h *MiscHandler) LoadingCycleBuckets(c *fiber.Ctx) error {
 	if standard <= 0 {
 		standard = 10
 	}
-	groups := service.ComputeTruckGroups(events, standard, service.TruckGroupGapSec, time.Now())
+	groups := service.ComputeTruckGroups(events, standard, h.getTruckGroupGapSec(), time.Now())
 
 	resp := loadingCycleBucketsResp{
 		CycleID:     cycle.ID.String(),
