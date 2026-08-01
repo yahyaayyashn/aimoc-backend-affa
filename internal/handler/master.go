@@ -15,9 +15,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// MasterHandler (versi AI-only) — hanya master data yang relevan untuk AI:
-// Kamera & Excavator. Master transaksi (Customer/Material/Vendor/Truck/Driver)
-// sudah dibuang pada pivot AI-only (19 Jul 2026).
+// MasterHandler (versi AI-only) — master data yang relevan untuk AI (Kamera &
+// Excavator) plus Material (dikembalikan 01 Agu 2026, lihat migration 000027).
+// Master transaksi lain (Customer/Vendor/Truck/Driver) tetap dibuang pada
+// pivot AI-only (19 Jul 2026).
 type MasterHandler struct {
 	DB *gorm.DB
 }
@@ -174,4 +175,61 @@ func (h *MasterHandler) DeleteExcavator(c *fiber.Ctx) error {
 	}
 	notifyMaster("EXCAVATOR_CHANGED", "delete", fiber.Map{"id": c.Params("id")})
 	return utils.OK(c, "Excavator dihapus", nil)
+}
+
+// ============== MATERIALS ==============
+// Dikembalikan sebagai master data (permintaan user 01 Agu 2026) -- tabel
+// sempat di-drop saat pivot AI-only (migration 000017), sekarang di-recreate
+// via migration 000027.
+
+func (h *MasterHandler) ListMaterials(c *fiber.Ctx) error {
+	var data []domain.Material
+	p := utils.GetPagination(c)
+	tx := h.DB.Model(&domain.Material{})
+	if q := c.Query("q", ""); q != "" {
+		tx = tx.Where("name ILIKE ? OR code ILIKE ?", "%"+q+"%", "%"+q+"%")
+	}
+	var total int64
+	tx.Count(&total)
+	tx.Limit(p.PerPage).Offset(p.Offset).Order("code ASC").Find(&data)
+	return utils.OKMeta(c, "OK", data, utils.MakeMeta(p, total))
+}
+
+func (h *MasterHandler) CreateMaterial(c *fiber.Ctx) error {
+	var x domain.Material
+	if err := c.BodyParser(&x); err != nil {
+		return utils.BadRequest(c, "Body tidak valid", nil)
+	}
+	if x.Code == "" {
+		x.Code = "MAT-" + uuid.NewString()[:8]
+	}
+	if x.Status == "" {
+		x.Status = "AKTIF"
+	}
+	if err := h.DB.Create(&x).Error; err != nil {
+		return utils.BadRequest(c, err.Error(), nil)
+	}
+	notifyMaster("MATERIAL_CHANGED", "create", x)
+	return utils.Created(c, "Material berhasil dibuat", x)
+}
+
+func (h *MasterHandler) UpdateMaterial(c *fiber.Ctx) error {
+	var x domain.Material
+	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil {
+		return utils.NotFound(c, "Material tidak ditemukan")
+	}
+	if err := c.BodyParser(&x); err != nil {
+		return utils.BadRequest(c, "Body tidak valid", nil)
+	}
+	h.DB.Save(&x)
+	notifyMaster("MATERIAL_CHANGED", "update", x)
+	return utils.OK(c, "Material diperbarui", x)
+}
+
+func (h *MasterHandler) DeleteMaterial(c *fiber.Ctx) error {
+	if err := h.DB.Delete(&domain.Material{}, "id = ?", c.Params("id")).Error; err != nil {
+		return utils.BadRequest(c, err.Error(), nil)
+	}
+	notifyMaster("MATERIAL_CHANGED", "delete", fiber.Map{"id": c.Params("id")})
+	return utils.OK(c, "Material dihapus", nil)
 }

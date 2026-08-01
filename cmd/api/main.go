@@ -142,6 +142,12 @@ func main() {
 	auth.Put("/excavators/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.UpdateExcavator)
 	auth.Delete("/excavators/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.DeleteExcavator)
 
+	// Master Material
+	auth.Get("/materials", masterH.ListMaterials)
+	auth.Post("/materials", middleware.RequireRole("SUPER_ADMIN"), masterH.CreateMaterial)
+	auth.Put("/materials/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.UpdateMaterial)
+	auth.Delete("/materials/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.DeleteMaterial)
+
 	// Aktivitas AI (siklus loading terdeteksi mandiri)
 	auth.Get("/loading-cycles", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), miscH.ListLoadingCycles)
 	auth.Get("/loading-cycles/:id/buckets", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), miscH.LoadingCycleBuckets)
