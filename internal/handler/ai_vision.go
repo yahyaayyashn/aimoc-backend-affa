@@ -78,7 +78,9 @@ func (h *AIVisionHandler) Video(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ServerError(c, err.Error(), nil)
 	}
-	defer resp.Body.Close()
+	// TIDAK defer Close() di sini -- SetBodyStream lazy, body baru dibaca fasthttp
+	// SETELAH handler ini return. fasthttp menutup resp.Body (io.Closer) sendiri
+	// setelah selesai stream/klien putus (pola sama CameraStreamHandler.Live).
 	c.Set("Content-Type", "video/mp4")
 	c.Context().Response.SetBodyStream(resp.Body, -1)
 	return nil
