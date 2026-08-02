@@ -177,6 +177,24 @@ func (h *MiscHandler) getTruckGroupGapSec() int {
 	return v
 }
 
+// getTruckCapacityM3 — dulu hardcoded (fallback `10` di ProduktivitasRevenue), dipindah
+// ke system_settings (02 Agu 2026). Cuma dipakai kalau Excavator.StandardBuckets
+// per-unit kosong -- StandardBuckets tetap jadi override utama kalau sudah diisi admin
+// di Master Data.
+func (h *MiscHandler) getTruckCapacityM3() int {
+	v := 10
+	var raw string
+	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'TRUCK_CAPACITY_M3'`).Scan(&raw)
+	if raw == "" {
+		return v
+	}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v <= 0 {
+		return 10
+	}
+	return v
+}
+
 // DashboardManajemen — ringkasan aktivitas excavator hari ini, bersumber murni dari
 // loading_cycles (deteksi AI mandiri) + alerts + heartbeat kamera. Metrik transaksi
 // (revenue/truck/ton) sudah dibuang pada pivot AI-only. Headline: status real-time
@@ -243,13 +261,13 @@ func (h *MiscHandler) DashboardManajemen(c *fiber.Ctx) error {
 		ORDER BY e.code ASC`, today, today).Scan(&excavators)
 
 	type excStatus struct {
-		ID              string  `json:"id"`
-		Code            string  `json:"code"`
-		Name            string  `json:"name"`
-		Status          string  `json:"status"` // aktif | idle | offline
-		Source          string  `json:"source"` // live | recording
-		UtilizationPct  float64 `json:"utilization_pct"`
-		SiklusHariIni   int64   `json:"siklus_hari_ini"`
+		ID             string  `json:"id"`
+		Code           string  `json:"code"`
+		Name           string  `json:"name"`
+		Status         string  `json:"status"` // aktif | idle | offline
+		Source         string  `json:"source"` // live | recording
+		UtilizationPct float64 `json:"utilization_pct"`
+		SiklusHariIni  int64   `json:"siklus_hari_ini"`
 	}
 	excStatuses := make([]excStatus, 0, len(excavators))
 	aktifCount := 0
@@ -330,15 +348,15 @@ func (h *MiscHandler) ActivityReport(c *fiber.Ctx) error {
 	}
 
 	type row struct {
-		ExcavatorID    string `json:"excavator_id"`
-		ExcavatorCode  string `json:"excavator_code"`
-		ExcavatorName  string `json:"excavator_name"`
-		Bucket         string `json:"bucket"`
-		CycleCount     int64  `json:"cycle_count"`
-		BucketTotal    int64  `json:"bucket_total"`
-		DurationSec    int64  `json:"duration_sec"`
-		FromLive       int64  `json:"from_live"`
-		FromRecording  int64  `json:"from_recording"`
+		ExcavatorID   string `json:"excavator_id"`
+		ExcavatorCode string `json:"excavator_code"`
+		ExcavatorName string `json:"excavator_name"`
+		Bucket        string `json:"bucket"`
+		CycleCount    int64  `json:"cycle_count"`
+		BucketTotal   int64  `json:"bucket_total"`
+		DurationSec   int64  `json:"duration_sec"`
+		FromLive      int64  `json:"from_live"`
+		FromRecording int64  `json:"from_recording"`
 	}
 
 	tx := h.DB.Table("loading_cycles t").

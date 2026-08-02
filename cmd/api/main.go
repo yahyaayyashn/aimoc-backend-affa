@@ -10,6 +10,7 @@ import (
 	"aimoc-backend/internal/repository"
 	"aimoc-backend/internal/service"
 	wshub "aimoc-backend/internal/websocket"
+	"aimoc-backend/pkg/aivision"
 	jwtpkg "aimoc-backend/pkg/jwt"
 	"aimoc-backend/pkg/utils"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -56,6 +58,18 @@ func main() {
 		utils.Log.Info("Device health poller dinonaktifkan (DEVICE_HEALTH_ENABLED=false)")
 	}
 
+	// AI Vision — pipeline baru tim AI (excavator_vlm), deteksi truk visual asli.
+	// Service Python eksternal, dipanggil lewat pkg/aivision. Nonaktif secara default
+	// (AI_VISION_ENABLED=false) sampai systemd service-nya tervalidasi di VPS.
+	aiVisionClient := aivision.NewClient(cfg.AIVisionURL, cfg.AIVisionAPIKey)
+	aiVisionSvc := service.NewAIVisionService(db, aiVisionClient, cfg.RecordingsDir, cfg.AIVisionEnabled, cfg.AIVisionMinDurationSec)
+	cctvSvc.AIVision = aiVisionSvc
+	if cfg.AIVisionEnabled {
+		utils.Log.Info("AI Vision aktif", zap.String("url", cfg.AIVisionURL), zap.Int("min_duration_sec", cfg.AIVisionMinDurationSec))
+	} else {
+		utils.Log.Info("AI Vision dinonaktifkan (AI_VISION_ENABLED=false)")
+	}
+
 	authH := handler.NewAuthHandler(authSvc)
 	masterH := handler.NewMasterHandler(db)
 	cctvH := handler.NewCCTVHandler(cctvSvc)
@@ -63,6 +77,7 @@ func main() {
 	uploadH := handler.NewUploadHandler(cfg.UploadDir)
 	camStreamH := handler.NewCameraStreamHandler(db, cfg.TestVideosDir, cfg.AIServiceDebugURL, cfg.RecordingsDir)
 	incidentH := handler.NewCameraIncidentHandler(service.NewCameraIncidentService(db))
+	aiVisionH := handler.NewAIVisionHandler(db, aiVisionSvc, aiVisionClient, cfg.TestVideosDir, cfg.UploadDir)
 
 	app := fiber.New(fiber.Config{
 		AppName:               cfg.AppName,
@@ -152,6 +167,14 @@ func main() {
 	auth.Get("/loading-cycles", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), miscH.ListLoadingCycles)
 	auth.Get("/loading-cycles/:id/buckets", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), miscH.LoadingCycleBuckets)
 	auth.Delete("/loading-cycles/:id", middleware.RequireRole("SUPER_ADMIN"), miscH.DeleteLoadingCycle)
+	auth.Get("/loading-cycles/:id/ai-vision", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.GetByLoadingCycle)
+
+	// AI Vision (pipeline baru tim AI, deteksi truk visual -- lihat internal/service/ai_vision.go)
+	auth.Get("/ai-vision", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.List)
+	auth.Get("/ai-vision/test-videos", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.TestVideos)
+	auth.Post("/ai-vision/manual", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.Manual)
+	auth.Get("/ai-vision/:id", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.Get)
+	auth.Get("/ai-vision/:id/video", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.Video)
 
 	// Alert & Notif
 	auth.Get("/alerts", miscH.ListAlerts)

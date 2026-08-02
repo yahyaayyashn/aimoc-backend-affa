@@ -17,6 +17,11 @@ import (
 // loading-session/scan/operator sudah dibuang pada pivot AI-only (19 Jul 2026).
 type CCTVService struct {
 	DB *gorm.DB
+	// AIVision — opsional, di-set dari main.go setelah konstruksi (bukan parameter
+	// constructor supaya tidak perlu ubah urutan wiring service lain). Nil-safe: kalau
+	// belum di-set (mis. AI_VISION_ENABLED=false), RecordLoadingCycle tetap jalan normal
+	// tanpa trigger AI Vision.
+	AIVision *AIVisionService
 }
 
 func NewCCTVService(db *gorm.DB) *CCTVService {
@@ -112,6 +117,9 @@ func (s *CCTVService) RecordLoadingCycle(req LoadingCycleDetectedReq) (*domain.L
 	}
 	if err := s.DB.Create(&lc).Error; err != nil {
 		return nil, err
+	}
+	if s.AIVision != nil {
+		s.AIVision.TriggerAsync(lc)
 	}
 	return &lc, nil
 }

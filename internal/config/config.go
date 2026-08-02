@@ -61,6 +61,21 @@ type Config struct {
 	DeviceHealthIntervalSec int
 	// DeviceHealthEnabled — matikan poller device-health per-deployment bila perlu.
 	DeviceHealthEnabled bool
+
+	// AIVisionEnabled — matikan trigger otomatis + jalur manual AI Vision (pipeline
+	// baru tim AI, lihat internal/service/ai_vision.go) per-deployment. Default false
+	// sampai service Python-nya tervalidasi manual di VPS.
+	AIVisionEnabled bool
+	// AIVisionURL — base URL service Python (excavator_vlm), mis.
+	// http://host.docker.internal:8001 dari dalam container backend.
+	AIVisionURL string
+	// AIVisionAPIKey — header X-API-Key ke service Python (AIMOC_API_KEY di sisi
+	// mereka). Kosong = auth nonaktif di service (cuma boleh untuk dev lokal).
+	AIVisionAPIKey string
+	// AIVisionMinDurationSec — siklus loading_cycles lebih pendek dari ini tidak
+	// dipicu ke AI Vision otomatis (kemungkinan noise, buang-buang antrean GPU
+	// bersama tim AI). Tidak berlaku untuk trigger manual.
+	AIVisionMinDurationSec int
 }
 
 func Load() *Config {
@@ -96,6 +111,8 @@ func Load() *Config {
 	v.SetDefault("VOD_SYNC_ENABLED", true)
 	v.SetDefault("DEVICE_HEALTH_INTERVAL_SEC", 300)
 	v.SetDefault("DEVICE_HEALTH_ENABLED", true)
+	v.SetDefault("AI_VISION_ENABLED", false)
+	v.SetDefault("AI_VISION_MIN_DURATION_SEC", 20)
 
 	cfg := &Config{
 		AppName:     v.GetString("APP_NAME"),
@@ -134,6 +151,11 @@ func Load() *Config {
 
 		DeviceHealthIntervalSec: v.GetInt("DEVICE_HEALTH_INTERVAL_SEC"),
 		DeviceHealthEnabled:     v.GetBool("DEVICE_HEALTH_ENABLED"),
+
+		AIVisionEnabled:        v.GetBool("AI_VISION_ENABLED"),
+		AIVisionURL:            v.GetString("AI_VISION_URL"),
+		AIVisionAPIKey:         v.GetString("AI_VISION_API_KEY"),
+		AIVisionMinDurationSec: v.GetInt("AI_VISION_MIN_DURATION_SEC"),
 	}
 
 	if cfg.JWTAccessSecret == "" {

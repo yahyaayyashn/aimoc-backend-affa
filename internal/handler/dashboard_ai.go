@@ -110,13 +110,14 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 			ExcavatorID:   exc.ID.String(),
 			ExcavatorCode: exc.Code,
 			ExcavatorName: exc.Name,
-			VolumeM3:      len(excEvents),
 		}
 		standard := exc.StandardBuckets
 		if standard <= 0 {
-			standard = 10
+			standard = h.getTruckCapacityM3()
 		}
 		for _, g := range groups {
+			// logRow.VolumeM3 SELALU bucket count aktual (log/audit per-siklus, beda
+			// makna dari row.VolumeM3 di bawah yang sudah hybrid truk/bucket).
 			logRow := produktivitasLogRow{
 				ExcavatorID:   exc.ID.String(),
 				ExcavatorCode: exc.Code,
@@ -129,8 +130,17 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 				Unvalidated:   g.Unvalidated,
 			}
 			if g.IsIdentified() {
+				// Truk SESUAI/OVERLOAD -- dihitung flat kapasitas truk (bukan bucket
+				// count aktual), sesuai keputusan 02 Agu 2026: produktivitas dihitung
+				// per truk yang benar-benar teridentifikasi, bukan cuma jumlah kerukan.
 				row.TruckIdentified++
+				row.VolumeM3 += standard
 				logRow.Revenue = revenuePerTruck
+			} else {
+				// UNDERLOAD/PENDING -- truk belum penuh/masih diisi, tetap dihitung dari
+				// bucket count aktual supaya volume riil yang sudah terangkut tidak
+				// hilang dari angka produktivitas.
+				row.VolumeM3 += g.BucketCount
 			}
 			if g.Unvalidated {
 				resp.UnvalidatedVolumeM3 += g.BucketCount
