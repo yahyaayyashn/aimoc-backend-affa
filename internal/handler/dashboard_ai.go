@@ -45,13 +45,17 @@ type produktivitasLogRow struct {
 }
 
 type produktivitasRevenueResp struct {
-	ProduktivitasLoadingM3 int                         `json:"produktivitas_loading_m3"`
-	TruckIdentified        int                         `json:"truck_identified"`
-	UnvalidatedVolumeM3    int                         `json:"unvalidated_volume_m3"`
-	RevenueTercatat        float64                     `json:"revenue_tercatat"`
-	EstimasiTotalRevenue   float64                     `json:"estimasi_total_revenue"`
-	PerExcavator           []produktivitasExcavatorRow `json:"per_excavator"`
-	LogAktivitas           []produktivitasLogRow       `json:"log_aktivitas"`
+	ProduktivitasLoadingM3 int     `json:"produktivitas_loading_m3"`
+	TruckIdentified        int     `json:"truck_identified"`
+	UnvalidatedVolumeM3    int     `json:"unvalidated_volume_m3"`
+	RevenueTercatat        float64 `json:"revenue_tercatat"`
+	EstimasiTotalRevenue   float64 `json:"estimasi_total_revenue"`
+	// RevenuePerTruck -- nilai REVENUE_PER_TRUCK yang lagi dipakai (system_settings,
+	// bisa diubah admin di Pengaturan). Diekspos supaya FE bisa tampilkan caption
+	// "× Rp{revenue_per_truck}" yang akurat, bukan hardcoded Rp250.000.
+	RevenuePerTruck float64                     `json:"revenue_per_truck"`
+	PerExcavator    []produktivitasExcavatorRow `json:"per_excavator"`
+	LogAktivitas    []produktivitasLogRow       `json:"log_aktivitas"`
 }
 
 // ProduktivitasRevenue — "01 - Dashboard Produktivitas & Revenue" (AI Only), lihat
@@ -98,8 +102,8 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 	}
 
 	now := time.Now()
-	resp := produktivitasRevenueResp{}
 	revenuePerTruck := h.getRevenuePerTruck()
+	resp := produktivitasRevenueResp{RevenuePerTruck: revenuePerTruck}
 	gapSec := h.getTruckGroupGapSec()
 
 	for _, exc := range excavators {
