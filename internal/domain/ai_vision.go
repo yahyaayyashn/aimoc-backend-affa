@@ -28,8 +28,10 @@ type AIVisionAnalysis struct {
 	// DashboardSummary — JSON mentah dari `dashboard_summary` job (kpi, activity,
 	// sessions[], dst — lihat DOCUMENTATION.md service Python), disimpan apa adanya
 	// (string, pola sama SystemSetting.ValueJSONB) supaya tidak perlu migration ulang
-	// tiap skema mereka berubah.
-	DashboardSummary string `gorm:"type:jsonb;column:dashboard_summary" json:"dashboard_summary"`
+	// tiap skema mereka berubah. Pointer (bukan string polos) -- kolom jsonb menolak
+	// string kosong "" sebagai INSERT awal (belum ada hasil saat baris dibuat), harus
+	// NULL sampai job selesai.
+	DashboardSummary *string `gorm:"type:jsonb;column:dashboard_summary" json:"dashboard_summary"`
 	// AnnotatedVideoPath — artifact key relatif (mis. "annotated_video"), dipakai
 	// handler proxy video, BUKAN URL penuh ke service Python.
 	AnnotatedVideoPath string     `gorm:"size:255;column:annotated_video_path" json:"annotated_video_path"`
