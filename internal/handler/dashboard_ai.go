@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"time"
@@ -17,18 +18,29 @@ import (
 // di misc.go, default tetap Rp250.000 kalau key belum di-set.
 
 type produktivitasExcavatorRow struct {
-	ExcavatorID     string  `json:"excavator_id"`
-	ExcavatorCode   string  `json:"excavator_code"`
-	ExcavatorName   string  `json:"excavator_name"`
-	VolumeM3        int     `json:"volume_m3"`
-	TruckIdentified int     `json:"truck_identified"`
+	ExcavatorID   string `json:"excavator_id"`
+	ExcavatorCode string `json:"excavator_code"`
+	ExcavatorName string `json:"excavator_name"`
+	// VolumeM3/TruckIdentified -- basis AI Vision sejak 03 Agu 2026 (keputusan user:
+	// "dashboard produktivitas pakai AI Vision aja"), BUKAN lagi pengelompokan bucket.
+	// = jumlah truk berstatus completed/overloaded dari analisa AI Vision OTOMATIS
+	// (trigger_source=auto saja -- hasil trigger manual sengaja tidak ikut, itu ruang
+	// uji coba model, bukan data produksi) x kapasitas truk (standard_buckets/
+	// TRUCK_CAPACITY_M3). Cakupannya cuma siklus yang KEBETULAN sudah dianalisa AI
+	// Vision, bukan seluruh aktivitas -- lihat getAIVisionTruckCount.
+	VolumeM3        int `json:"volume_m3"`
+	TruckIdentified int `json:"truck_identified"`
+	// RevenueTercatat/EstimasiRevenue -- TETAP basis bucket (pengelompokan
+	// bucket_events/TruckGroup lama), sengaja tidak ikut pindah ke AI Vision.
 	RevenueTercatat float64 `json:"revenue_tercatat"`
 	EstimasiRevenue float64 `json:"estimasi_revenue"`
-	Sesuai          int     `json:"sesuai"`
-	Underload       int     `json:"underload"`
-	Overload        int     `json:"overload"`
-	Pending         int     `json:"pending"`
-	PendingBucketM3 int     `json:"pending_bucket_m3"`
+	// Sesuai/Underload/Overload/Pending -- juga basis bucket (TruckGroup), tidak
+	// berubah.
+	Sesuai          int `json:"sesuai"`
+	Underload       int `json:"underload"`
+	Overload        int `json:"overload"`
+	Pending         int `json:"pending"`
+	PendingBucketM3 int `json:"pending_bucket_m3"`
 }
 
 type produktivitasLogRow struct {
@@ -119,9 +131,15 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 		if standard <= 0 {
 			standard = h.getTruckCapacityM3()
 		}
+
+		// Basis BUCKET -- dipakai HANYA untuk Revenue Tercatat/Estimasi Revenue (tetap
+		// seperti sebelumnya, tidak ikut pindah ke AI Vision). bucketTruckIdentified/
+		// bucketVolumeM3 sengaja TIDAK diekspos ke row.TruckIdentified/row.VolumeM3 lagi
+		// -- itu sudah jadi basis AI Vision di bawah.
+		bucketTruckIdentified := 0
+		bucketVolumeM3 := 0
 		for _, g := range groups {
-			// logRow.VolumeM3 SELALU bucket count aktual (log/audit per-siklus, beda
-			// makna dari row.VolumeM3 di bawah yang sudah hybrid truk/bucket).
+			// logRow.VolumeM3 SELALU bucket count aktual (log/audit per-siklus).
 			logRow := produktivitasLogRow{
 				ExcavatorID:   exc.ID.String(),
 				ExcavatorCode: exc.Code,
@@ -134,17 +152,11 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 				Unvalidated:   g.Unvalidated,
 			}
 			if g.IsIdentified() {
-				// Truk SESUAI/OVERLOAD -- dihitung flat kapasitas truk (bukan bucket
-				// count aktual), sesuai keputusan 02 Agu 2026: produktivitas dihitung
-				// per truk yang benar-benar teridentifikasi, bukan cuma jumlah kerukan.
-				row.TruckIdentified++
-				row.VolumeM3 += standard
+				bucketTruckIdentified++
+				bucketVolumeM3 += standard
 				logRow.Revenue = revenuePerTruck
 			} else {
-				// UNDERLOAD/PENDING -- truk belum penuh/masih diisi, tetap dihitung dari
-				// bucket count aktual supaya volume riil yang sudah terangkut tidak
-				// hilang dari angka produktivitas.
-				row.VolumeM3 += g.BucketCount
+				bucketVolumeM3 += g.BucketCount
 			}
 			if g.Unvalidated {
 				resp.UnvalidatedVolumeM3 += g.BucketCount
@@ -162,8 +174,13 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 			}
 			resp.LogAktivitas = append(resp.LogAktivitas, logRow)
 		}
-		row.RevenueTercatat = float64(row.TruckIdentified) * revenuePerTruck
-		row.EstimasiRevenue = math.Ceil(float64(row.VolumeM3)/float64(standard)) * revenuePerTruck
+		row.RevenueTercatat = float64(bucketTruckIdentified) * revenuePerTruck
+		row.EstimasiRevenue = math.Ceil(float64(bucketVolumeM3)/float64(standard)) * revenuePerTruck
+
+		// Basis AI VISION -- Produktivitas Loading & Truk Teridentifikasi (keputusan
+		// user 03 Agu 2026).
+		row.TruckIdentified = h.getAIVisionTruckCount(exc.Code, from, to)
+		row.VolumeM3 = row.TruckIdentified * standard
 
 		resp.ProduktivitasLoadingM3 += row.VolumeM3
 		resp.TruckIdentified += row.TruckIdentified
@@ -180,6 +197,42 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 	})
 
 	return utils.OK(c, "OK", resp)
+}
+
+// getAIVisionTruckCount — jumlah truk "selesai" (status completed/overloaded, sama
+// semantik dengan Truk Teridentifikasi versi bucket lama: Sesuai+Overload) dari SEMUA
+// analisa AI Vision completed+auto untuk 1 unit_id excavator dalam rentang [from, to].
+// trigger_source=manual SENGAJA tidak ikut dihitung -- halaman Analisa Video AI tetap
+// ruang uji coba model, bukan data produksi (keputusan user 03 Agu 2026, alasan sama
+// dengan kenapa kamera/excavator test tidak boleh mencemari angka utama).
+func (h *MiscHandler) getAIVisionTruckCount(unitCode, from, to string) int {
+	q := h.DB.Where("unit_id = ? AND status = 'completed' AND trigger_source = 'auto'", unitCode)
+	if from != "" {
+		q = q.Where("submitted_at::date >= ?", from)
+	}
+	if to != "" {
+		q = q.Where("submitted_at::date <= ?", to)
+	}
+	var rows []domain.AIVisionAnalysis
+	q.Find(&rows)
+
+	total := 0
+	for _, r := range rows {
+		if r.DashboardSummary == nil {
+			continue
+		}
+		var parsed struct {
+			KPI struct {
+				CompletedTruckLoads  int `json:"completed_truck_loads"`
+				OverloadedTruckLoads int `json:"overloaded_truck_loads"`
+			} `json:"kpi"`
+		}
+		if err := json.Unmarshal([]byte(*r.DashboardSummary), &parsed); err != nil {
+			continue
+		}
+		total += parsed.KPI.CompletedTruckLoads + parsed.KPI.OverloadedTruckLoads
+	}
+	return total
 }
 
 // loadingCycleBucketsResp — breakdown truk untuk 1 loading_cycle spesifik (halaman "04
