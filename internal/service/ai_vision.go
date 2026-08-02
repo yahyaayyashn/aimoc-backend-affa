@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"aimoc-backend/internal/domain"
@@ -31,7 +32,8 @@ const maxUploadWidth = 960
 //
 // Dua jalur trigger:
 //   - TriggerAsync: otomatis, dipanggil CCTVService.RecordLoadingCycle tiap 1 siklus
-//     loading selesai -- ambil klip dari RecordingsDir (VOD Sync), fire-and-forget.
+//     loading selesai -- ambil klip dari RecordingsDir (VOD Sync, kamera blackvue://)
+//     atau langsung dari TestVideosDir (kamera video:// simulasi), fire-and-forget.
 //   - TriggerManual: dipanggil handler POST /ai-vision/manual, video sudah disiapkan
 //     user (upload atau file test yang sudah ada).
 //
@@ -41,15 +43,17 @@ type AIVisionService struct {
 	DB             *gorm.DB
 	Client         *aivision.Client
 	RecordingsDir  string
+	TestVideosDir  string
 	Enabled        bool
 	MinDurationSec int
 }
 
-func NewAIVisionService(db *gorm.DB, client *aivision.Client, recordingsDir string, enabled bool, minDurationSec int) *AIVisionService {
+func NewAIVisionService(db *gorm.DB, client *aivision.Client, recordingsDir, testVideosDir string, enabled bool, minDurationSec int) *AIVisionService {
 	return &AIVisionService{
 		DB:             db,
 		Client:         client,
 		RecordingsDir:  recordingsDir,
+		TestVideosDir:  testVideosDir,
 		Enabled:        enabled,
 		MinDurationSec: minDurationSec,
 	}
@@ -136,6 +140,35 @@ func ExtractClip(recordingsDir, cameraCode string, start, end time.Time) (string
 	return outPath, nil
 }
 
+// prepareTestVideoClip -- untuk kamera video:// (simulasi/testing, mis. CAM-EXC-02
+// dipakai sebagai pengganti dashcam sementara). Tidak ada konsep "rekaman per-window-
+// waktu" seperti VOD dashcam asli -- satu-satunya sumber adalah file video test itu
+// sendiri, diputar ulang terus oleh ai-service. Dikirim apa adanya lewat
+// prepareUploadClip yang sama (batas resolusi tetap konsisten), bukan potongan sesuai
+// window siklus seperti ExtractClip.
+func prepareTestVideoClip(testVideosDir, streamURL string) (string, error) {
+	rel := strings.TrimPrefix(streamURL, "video://")
+	if strings.TrimSpace(rel) == "" {
+		return "", fmt.Errorf("path video kosong")
+	}
+	base := filepath.Clean(testVideosDir)
+	full := filepath.Clean(filepath.Join(base, rel))
+	if full != base && !strings.HasPrefix(full, base+string(filepath.Separator)) {
+		return "", fmt.Errorf("path video di luar direktori yang diizinkan")
+	}
+	if _, err := os.Stat(full); err != nil {
+		return "", fmt.Errorf("file video test tidak ditemukan: %s", rel)
+	}
+	outPath, err := newClipOutputPath()
+	if err != nil {
+		return "", err
+	}
+	if err := prepareUploadClip([]string{full}, outPath); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
+
 // newClipOutputPath -- path temp baru untuk 1 klip hasil olahan (dipakai jalur otomatis
 // & manual, keduanya lewat prepareUploadClip).
 func newClipOutputPath() (string, error) {
@@ -199,6 +232,21 @@ func (s *AIVisionService) TriggerAsync(cycle domain.LoadingCycle) {
 		}
 	}
 
+	if strings.HasPrefix(cam.StreamURL, "video://") {
+		// Kamera simulasi (video test diputar ulang terus) menghasilkan loading_cycles
+		// baru berulang-ulang dari konten yang SAMA -- tanpa throttle ini, tiap
+		// perulangan akan resubmit video test yang identik ke antrean GPU. Lewati kalau
+		// masih ada job jalan, atau sudah ada yang selesai dalam 30 menit terakhir.
+		var recentCount int64
+		s.DB.Model(&domain.AIVisionAnalysis{}).
+			Where("unit_id = ? AND trigger_source = 'auto' AND (status IN ('queued','running') OR (status = 'completed' AND submitted_at > ?))",
+				unitID, time.Now().Add(-30*time.Minute)).
+			Count(&recentCount)
+		if recentCount > 0 {
+			return
+		}
+	}
+
 	row := domain.AIVisionAnalysis{
 		LoadingCycleID: &cycle.ID,
 		TriggerSource:  "auto",
@@ -219,7 +267,16 @@ func (s *AIVisionService) TriggerAsync(cycle domain.LoadingCycle) {
 				utils.Log.Error("ai vision trigger panic", zap.Any("recover", r))
 			}
 		}()
-		clipPath, err := ExtractClip(s.RecordingsDir, cam.Code, cycle.StartTS, cycle.EndTS)
+		var clipPath string
+		var err error
+		switch {
+		case strings.HasPrefix(cam.StreamURL, "blackvue://"):
+			clipPath, err = ExtractClip(s.RecordingsDir, cam.Code, cycle.StartTS, cycle.EndTS)
+		case strings.HasPrefix(cam.StreamURL, "video://"):
+			clipPath, err = prepareTestVideoClip(s.TestVideosDir, cam.StreamURL)
+		default:
+			err = fmt.Errorf("skema stream_url kamera tidak didukung untuk AI Vision: %s", cam.StreamURL)
+		}
 		if err != nil {
 			if utils.Log != nil {
 				utils.Log.Warn("ai vision: gagal ambil klip", zap.String("camera", cam.Code), zap.Error(err))

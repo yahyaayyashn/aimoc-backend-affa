@@ -62,7 +62,7 @@ func main() {
 	// Service Python eksternal, dipanggil lewat pkg/aivision. Nonaktif secara default
 	// (AI_VISION_ENABLED=false) sampai systemd service-nya tervalidasi di VPS.
 	aiVisionClient := aivision.NewClient(cfg.AIVisionURL, cfg.AIVisionAPIKey)
-	aiVisionSvc := service.NewAIVisionService(db, aiVisionClient, cfg.RecordingsDir, cfg.AIVisionEnabled, cfg.AIVisionMinDurationSec)
+	aiVisionSvc := service.NewAIVisionService(db, aiVisionClient, cfg.RecordingsDir, cfg.TestVideosDir, cfg.AIVisionEnabled, cfg.AIVisionMinDurationSec)
 	cctvSvc.AIVision = aiVisionSvc
 	if cfg.AIVisionEnabled {
 		utils.Log.Info("AI Vision aktif", zap.String("url", cfg.AIVisionURL), zap.Int("min_duration_sec", cfg.AIVisionMinDurationSec))
