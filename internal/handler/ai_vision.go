@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,49 @@ func (h *AIVisionHandler) List(c *fiber.Ctx) error {
 	var rows []domain.AIVisionAnalysis
 	h.DB.Order("submitted_at DESC").Limit(p.PerPage).Offset(p.Offset).Find(&rows)
 	return utils.OKMeta(c, "OK", rows, utils.MakeMeta(p, total))
+}
+
+// ExcavatorSummary — GET /excavators/:id/ai-vision-summary, agregat durasi Mining vs
+// Loading dari SEMUA analisa AI Vision (auto + manual) yang statusnya completed untuk
+// excavator ini (dicocokkan lewat unit_id = Excavator.Code). Dipakai menggantikan
+// placeholder "belum tersedia" di DetailExcavator & card Klasifikasi Aktivitas di
+// Dashboard Produktivitas -- catatan penting: cakupannya cuma siklus yang KEBETULAN
+// sudah dianalisa AI Vision (otomatis per siklus >=20 detik, atau manual), BUKAN semua
+// aktivitas excavator ini -- FE wajib tampilkan ini sebagai cakupan parsial, bukan
+// total aktivitas.
+func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
+	var exc domain.Excavator
+	if err := h.DB.First(&exc, "id = ?", c.Params("id")).Error; err != nil {
+		return utils.NotFound(c, "Excavator tidak ditemukan")
+	}
+
+	var rows []domain.AIVisionAnalysis
+	h.DB.Where("unit_id = ? AND status = 'completed'", exc.Code).Find(&rows)
+
+	var miningSec, loadingSec float64
+	analyzed := 0
+	for _, r := range rows {
+		if r.DashboardSummary == nil {
+			continue
+		}
+		var parsed struct {
+			Activity struct {
+				DurationsSeconds map[string]float64 `json:"durations_seconds"`
+			} `json:"activity"`
+		}
+		if err := json.Unmarshal([]byte(*r.DashboardSummary), &parsed); err != nil {
+			continue
+		}
+		miningSec += parsed.Activity.DurationsSeconds["mining"]
+		loadingSec += parsed.Activity.DurationsSeconds["loading"]
+		analyzed++
+	}
+
+	return utils.OK(c, "OK", fiber.Map{
+		"analyzed_count":  analyzed,
+		"mining_seconds":  miningSec,
+		"loading_seconds": loadingSec,
+	})
 }
 
 // Video — GET /ai-vision/:id/video, proxy stream artifact video ber-anotasi dari

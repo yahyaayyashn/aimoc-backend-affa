@@ -156,6 +156,7 @@ func main() {
 	auth.Post("/excavators", middleware.RequireRole("SUPER_ADMIN"), masterH.CreateExcavator)
 	auth.Put("/excavators/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.UpdateExcavator)
 	auth.Delete("/excavators/:id", middleware.RequireRole("SUPER_ADMIN"), masterH.DeleteExcavator)
+	auth.Get("/excavators/:id/ai-vision-summary", middleware.RequireRole("SUPER_ADMIN", "MANAJEMEN"), aiVisionH.ExcavatorSummary)
 
 	// Master Material
 	auth.Get("/materials", masterH.ListMaterials)
