@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o server ./cmd/api/
 FROM alpine:3.20 AS runner
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata wget
+RUN apk add --no-cache ca-certificates tzdata wget ffmpeg
 ENV TZ=Asia/Jakarta
 
 COPY --from=builder /app/server .

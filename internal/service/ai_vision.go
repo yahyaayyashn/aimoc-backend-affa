@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +17,12 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// maxUploadWidth -- batas lebar video yang dikirim ke AI Vision (permintaan tim AI,
+// Gracia, 02 Agu 2026: "resolusinya jangan terlalu gede ... minimal 640 sampe 960 biar
+// ga terlalu berat"). Cuma jadi batas ATAS -- video yang sudah lebih kecil TIDAK
+// di-upscale (upscale cuma nambah blur, bukan detail asli, tidak membantu deteksi).
+const maxUploadWidth = 960
 
 // AIVisionService — jembatan ke pipeline AI Vision baru tim AI (excavator_vlm, Gracia
 // BCS): YOLO+BoT-SORT+LSTM asli yang mendeteksi truk secara visual, dijalankan sebagai
@@ -99,9 +104,9 @@ func listSegments(recordingsDir, cameraCode string) ([]recordingSegment, error) 
 }
 
 // ExtractClip mencari segmen VOD (hasil VODSyncService) yang overlap window
-// [start-pad, end+pad] untuk 1 kamera, lalu menggabungkannya jadi 1 file mp4 di temp
-// dir (ffmpeg concat kalau >1 segmen, copy langsung kalau cuma 1). Caller wajib hapus
-// file hasil setelah dipakai (bukan segmen asli -- itu tetap milik VODSyncService).
+// [start-pad, end+pad] untuk 1 kamera, lalu menggabungkan + membatasi resolusinya lewat
+// prepareUploadClip. Caller wajib hapus file hasil setelah dipakai (bukan segmen asli --
+// itu tetap milik VODSyncService).
 func ExtractClip(recordingsDir, cameraCode string, start, end time.Time) (string, error) {
 	const pad = 75 * time.Second // segmen ~1 menit, kasih slack di kedua ujung
 	windowStart := start.In(jakarta).Add(-pad)
@@ -111,66 +116,60 @@ func ExtractClip(recordingsDir, cameraCode string, start, end time.Time) (string
 	if err != nil {
 		return "", err
 	}
-	var matched []recordingSegment
+	var paths []string
 	for _, s := range segs {
 		if !s.TS.Before(windowStart) && !s.TS.After(windowEnd) {
-			matched = append(matched, s)
+			paths = append(paths, s.Path)
 		}
 	}
-	if len(matched) == 0 {
+	if len(paths) == 0 {
 		return "", fmt.Errorf("tidak ada segmen rekaman kamera %s pada window %s..%s", cameraCode, windowStart, windowEnd)
 	}
 
-	outDir := filepath.Join(os.TempDir(), "aivision-clips")
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		return "", fmt.Errorf("gagal buat temp dir klip: %w", err)
+	outPath, err := newClipOutputPath()
+	if err != nil {
+		return "", err
 	}
-	outPath := filepath.Join(outDir, uuid.NewString()+".mp4")
-
-	if len(matched) == 1 {
-		if err := copyFile(matched[0].Path, outPath); err != nil {
-			return "", fmt.Errorf("gagal salin segmen tunggal: %w", err)
-		}
-		return outPath, nil
-	}
-	if err := concatSegments(matched, outPath); err != nil {
+	if err := prepareUploadClip(paths, outPath); err != nil {
 		return "", err
 	}
 	return outPath, nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+// newClipOutputPath -- path temp baru untuk 1 klip hasil olahan (dipakai jalur otomatis
+// & manual, keduanya lewat prepareUploadClip).
+func newClipOutputPath() (string, error) {
+	outDir := filepath.Join(os.TempDir(), "aivision-clips")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return "", fmt.Errorf("gagal buat temp dir klip: %w", err)
 	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	return filepath.Join(outDir, uuid.NewString()+".mp4"), nil
 }
 
-// concatSegments menggabungkan >1 segmen berurutan lewat ffmpeg concat demuxer (-c copy,
-// tanpa re-encode -- semua segmen sumbernya sama, dashcam BlackVue yang sama).
-func concatSegments(segs []recordingSegment, outPath string) error {
+// prepareUploadClip menggabungkan 1+ video (ffmpeg concat demuxer, jalan juga untuk 1
+// file) SEKALIGUS membatasi lebar maksimum ke maxUploadWidth dalam 1 pass -- dipakai
+// jalur otomatis (klip VOD) maupun manual (upload/pilihan user), supaya kontrol resolusi
+// cuma di 1 tempat, bukan logic dobel. Selalu re-encode (bukan `-c copy`) karena filter
+// scale butuh itu -- video yang sudah kecil pun ikut lewat sini (murah dibanding proses
+// GPU di baliknya, ~detik bukan menit), demi 1 code path yang sederhana.
+func prepareUploadClip(paths []string, outPath string) error {
 	listPath := outPath + ".concat.txt"
 	var lines string
-	for _, s := range segs {
-		lines += fmt.Sprintf("file '%s'\n", filepath.ToSlash(s.Path))
+	for _, p := range paths {
+		lines += fmt.Sprintf("file '%s'\n", filepath.ToSlash(p))
 	}
 	if err := os.WriteFile(listPath, []byte(lines), 0644); err != nil {
 		return fmt.Errorf("gagal tulis daftar concat: %w", err)
 	}
 	defer os.Remove(listPath)
 
-	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outPath)
+	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listPath,
+		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", maxUploadWidth),
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-an",
+		outPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("ffmpeg concat gagal: %w (%s)", err, string(out))
+		return fmt.Errorf("ffmpeg gagal siapkan klip: %w (%s)", err, string(out))
 	}
 	return nil
 }
@@ -235,8 +234,11 @@ func (s *AIVisionService) TriggerAsync(cycle domain.LoadingCycle) {
 
 // TriggerManual dipanggil handler POST /ai-vision/manual. videoPath sudah siap pakai
 // (file upload yang sudah disimpan, atau file test yang sudah ada di TestVideosDir) --
-// TIDAK dihapus di sini (beda dari klip otomatis yang memang temp file), dan TIDAK
-// difilter MinDurationSec (video manual sengaja dipilih user).
+// videoPath ASLI tidak pernah dihapus/diubah di sini (beda dari klip otomatis yang
+// memang temp file). Tetap lewat prepareUploadClip supaya batas resolusi (maxUploadWidth)
+// konsisten dengan jalur otomatis -- hasilnya file temp BARU yang dihapus setelah upload,
+// bukan videoPath aslinya. TIDAK difilter MinDurationSec (video manual sengaja dipilih
+// user).
 func (s *AIVisionService) TriggerManual(unitID, label, videoPath string) (*domain.AIVisionAnalysis, error) {
 	if !s.Enabled || s.Client == nil {
 		return nil, fmt.Errorf("AI Vision belum dikonfigurasi (AI_VISION_ENABLED=false)")
@@ -262,7 +264,17 @@ func (s *AIVisionService) TriggerManual(unitID, label, videoPath string) (*domai
 				utils.Log.Error("ai vision manual trigger panic", zap.Any("recover", r))
 			}
 		}()
-		s.submitAndPoll(row.ID, videoPath, unitID, time.Now().Format(time.RFC3339))
+		clipPath, err := newClipOutputPath()
+		if err != nil {
+			s.markFailed(row.ID, err.Error())
+			return
+		}
+		if err := prepareUploadClip([]string{videoPath}, clipPath); err != nil {
+			s.markFailed(row.ID, err.Error())
+			return
+		}
+		defer os.Remove(clipPath)
+		s.submitAndPoll(row.ID, clipPath, unitID, time.Now().Format(time.RFC3339))
 	}()
 
 	return &row, nil
