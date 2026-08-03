@@ -81,7 +81,11 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 	var rows []domain.AIVisionAnalysis
 	h.DB.Where("unit_id = ? AND status = 'completed'", exc.Code).Find(&rows)
 
-	var miningSec, loadingSec float64
+	// AI Vision sebenarnya kirim 4 kategori (mining/loading/idle/unknown) di
+	// activity.durations_seconds -- dulu cuma mining+loading yang diambil, idle/unknown
+	// diam-diam dibuang. Sekarang keempatnya di-sum supaya FE bisa hitung persentase
+	// dari total durasi video yang BENAR (bukan cuma dari mining+loading sebagai 100%).
+	var miningSec, loadingSec, idleSec, unknownSec float64
 	analyzed := 0
 	for _, r := range rows {
 		if r.DashboardSummary == nil {
@@ -97,6 +101,8 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 		}
 		miningSec += parsed.Activity.DurationsSeconds["mining"]
 		loadingSec += parsed.Activity.DurationsSeconds["loading"]
+		idleSec += parsed.Activity.DurationsSeconds["idle"]
+		unknownSec += parsed.Activity.DurationsSeconds["unknown"]
 		analyzed++
 	}
 
@@ -104,6 +110,8 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 		"analyzed_count":  analyzed,
 		"mining_seconds":  miningSec,
 		"loading_seconds": loadingSec,
+		"idle_seconds":    idleSec,
+		"unknown_seconds": unknownSec,
 	})
 }
 
