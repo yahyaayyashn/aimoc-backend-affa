@@ -23,11 +23,11 @@ type produktivitasExcavatorRow struct {
 	ExcavatorName string `json:"excavator_name"`
 	// VolumeM3/TruckIdentified -- basis AI Vision sejak 03 Agu 2026 (keputusan user:
 	// "dashboard produktivitas pakai AI Vision aja"), BUKAN lagi pengelompokan bucket.
-	// = jumlah truk berstatus completed/overloaded dari analisa AI Vision OTOMATIS
-	// (trigger_source=auto saja -- hasil trigger manual sengaja tidak ikut, itu ruang
-	// uji coba model, bukan data produksi) x kapasitas truk (standard_buckets/
-	// TRUCK_CAPACITY_M3). Cakupannya cuma siklus yang KEBETULAN sudah dianalisa AI
-	// Vision, bukan seluruh aktivitas -- lihat getAIVisionTruckCount.
+	// = jumlah truk berstatus completed/overloaded dari analisa AI Vision (auto MAUPUN
+	// manual, lihat ponytail-note di getAIVisionTruckCount -- manual SEMENTARA ikut
+	// dihitung supaya user bisa self-serve test dashboard tanpa dashcam asli) x kapasitas
+	// truk (standard_buckets/TRUCK_CAPACITY_M3). Cakupannya cuma siklus yang KEBETULAN
+	// sudah dianalisa AI Vision, bukan seluruh aktivitas -- lihat getAIVisionTruckCount.
 	VolumeM3        int `json:"volume_m3"`
 	TruckIdentified int `json:"truck_identified"`
 	// RevenueTercatat/EstimasiRevenue -- TETAP basis bucket (pengelompokan
@@ -205,8 +205,13 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 // trigger_source=manual SENGAJA tidak ikut dihitung -- halaman Analisa Video AI tetap
 // ruang uji coba model, bukan data produksi (keputusan user 03 Agu 2026, alasan sama
 // dengan kenapa kamera/excavator test tidak boleh mencemari angka utama).
+// ponytail: SEMENTARA (permintaan user 03 Agu 2026) -- manual ikut dihitung juga (filter
+// trigger_source='auto' dilepas) supaya user bisa self-serve cek dashboard lewat halaman
+// Analisa Video AI sendiri, tanpa dashcam asli/tanpa minta developer trigger webhook manual.
+// WAJIB kembalikan filter trigger_source='auto' sebelum dashcam asli live -- kalau tidak,
+// siapapun buka halaman Analisa Video AI bisa mencemari angka produksi dashboard.
 func (h *MiscHandler) getAIVisionTruckCount(unitCode, from, to string) int {
-	q := h.DB.Where("unit_id = ? AND status = 'completed' AND trigger_source = 'auto'", unitCode)
+	q := h.DB.Where("unit_id = ? AND status = 'completed'", unitCode)
 	if from != "" {
 		q = q.Where("submitted_at::date >= ?", from)
 	}
