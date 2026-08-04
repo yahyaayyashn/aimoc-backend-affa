@@ -137,8 +137,10 @@ func ensureOperatorAccounts(db *gorm.DB) {
 }
 
 // ensureAdminAccounts menyelaraskan akun admin operasional: mengganti nama lama
-// "Super Admin AIMOC" menjadi "Admin Gate Utara", serta menambahkan akun kedua
-// "Admin Gate Selatan" — dua admin untuk gate utara & selatan agar audit trail jelas.
+// "Super Admin AIMOC" menjadi "Admin Utara", serta menambahkan akun kedua
+// "Admin Selatan" — dua admin (utara & selatan) agar audit trail jelas. Istilah
+// "Gate" sengaja dibuang dari nama (permintaan user 04 Agu 2026) -- sisa istilah
+// alur transaksi lama, tidak relevan lagi di versi AI-only.
 // Idempotent: aman dijalankan setiap start.
 func ensureAdminAccounts(db *gorm.DB) {
 	// Hash bcrypt cost 10 dari "Admin@123" (diverifikasi cocok — lihat catatan bug
@@ -146,8 +148,8 @@ func ensureAdminAccounts(db *gorm.DB) {
 	// mengklaim begitu, ditemukan saat verifikasi login pivot AI-only).
 	const pwHash = `$2a$10$RYOYfhZw0V/xSh3dp87Sq.3xQzesv9mJzsok19NXiyMYriMdIOg3C`
 
-	// Gate Utara — rename akun super admin lama (hanya bila masih bernama bawaan).
-	db.Exec(`UPDATE users SET full_name = 'Admin Gate Utara'
+	// Admin Utara — rename akun super admin lama (hanya bila masih bernama bawaan).
+	db.Exec(`UPDATE users SET full_name = 'Admin Utara'
 		WHERE email = 'admin@aimoc.id' AND full_name = 'Super Admin AIMOC'`)
 	// Perbaiki password admin@aimoc.id kalau masih hash lama yang salah (idempotent —
 	// hanya menimpa hash spesifik lama yang diketahui salah, tak menyentuh password
@@ -155,9 +157,9 @@ func ensureAdminAccounts(db *gorm.DB) {
 	db.Exec(`UPDATE users SET password_hash = ?
 		WHERE email = 'admin@aimoc.id' AND password_hash = '$2a$10$Yy7CtbI9Op0gC2g6cWN7XOaDdM7bb2T4rWcN5LqU3HsrYwO/2eNHi'`, pwHash)
 
-	// Gate Selatan — akun admin kedua (role SUPER_ADMIN, sama seperti gate utara).
+	// Admin Selatan — akun admin kedua (role SUPER_ADMIN, sama seperti admin utara).
 	db.Exec(`INSERT INTO users (role_id, email, phone, password_hash, full_name, status)
-		SELECT r.id, 'admin.selatan@aimoc.id', '081234567891', ?, 'Admin Gate Selatan', 'AKTIF'
+		SELECT r.id, 'admin.selatan@aimoc.id', '081234567891', ?, 'Admin Selatan', 'AKTIF'
 		FROM roles r WHERE r.code = 'SUPER_ADMIN'
 		ON CONFLICT (email) DO NOTHING`, pwHash)
 }
