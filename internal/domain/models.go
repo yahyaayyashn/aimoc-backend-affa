@@ -45,6 +45,11 @@ type User struct {
 	FullName     string     `gorm:"size:150" json:"full_name"`
 	AvatarURL    string     `json:"avatar_url"`
 	Status       string     `gorm:"size:20" json:"status"`
+	// IsTestViewer — kalau true, semua endpoint yang expose data excavator (dashboard,
+	// riwayat aktivitas, dll) di-scope HANYA ke excavator Excavator.IsTest=true (dan
+	// sebaliknya untuk user biasa) -- lihat isTestViewer() di handler/common.go. Untuk
+	// akun demo/testing dashboard versi deploy supaya tidak numpang ke data produksi.
+	IsTestViewer bool       `gorm:"column:is_test_viewer" json:"is_test_viewer"`
 	LastLoginAt  *time.Time `json:"last_login_at"`
 	CustomerID   *uuid.UUID `gorm:"type:uuid" json:"customer_id"`
 	// ExcavatorID — excavator yang dioperasikan oleh user bertipe OPERATOR.
@@ -222,6 +227,10 @@ type Excavator struct {
 	Camera          *Camera    `json:"camera,omitempty"`
 	ImageURL        string     `json:"image_url"`
 	Status          string     `gorm:"size:20" json:"status"`
+	// IsTest — unit simulasi/demo (mis. kamera video://, bukan dashcam asli), dikecualikan
+	// dari dashboard user produksi & HANYA muncul untuk user is_test_viewer=true -- lihat
+	// isTestViewer() di handler/common.go.
+	IsTest          bool       `gorm:"column:is_test" json:"is_test"`
 	Notes           string     `gorm:"type:text" json:"notes"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

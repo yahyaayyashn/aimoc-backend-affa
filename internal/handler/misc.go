@@ -30,7 +30,10 @@ func (h *MiscHandler) ListLoadingCycles(c *fiber.Ctx) error {
 	p := utils.GetPagination(c)
 	tx := h.DB.Model(&domain.LoadingCycle{}).
 		Preload("Excavator").
-		Preload("Camera")
+		Preload("Camera").
+		Preload("AIVisionAnalysis").
+		Joins("JOIN excavators ON excavators.id = loading_cycles.excavator_id").
+		Where("excavators.is_test = ?", isTestViewer(h.DB, c))
 	if id := c.Query("id", ""); id != "" {
 		tx = tx.Where("id = ?", id)
 	}

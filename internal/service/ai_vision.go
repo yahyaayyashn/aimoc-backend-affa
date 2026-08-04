@@ -112,9 +112,17 @@ func listSegments(recordingsDir, cameraCode string) ([]recordingSegment, error) 
 // prepareUploadClip. Caller wajib hapus file hasil setelah dipakai (bukan segmen asli --
 // itu tetap milik VODSyncService).
 func ExtractClip(recordingsDir, cameraCode string, start, end time.Time) (string, error) {
-	const pad = 75 * time.Second // segmen ~1 menit, kasih slack di kedua ujung
-	windowStart := start.In(jakarta).Add(-pad)
-	windowEnd := end.In(jakarta).Add(pad)
+	// Padding asimetris (04 Agu 2026) -- awalnya simetris 75 detik, tapi cycle_detector.py
+	// menutup siklus dgn end_ts = waktu GALI TERAKHIR terdeteksi (bukan waktu siklus
+	// benar-benar ditutup, yang baru terjadi idle_timeout_sec/120s kemudian). Jadi jeda
+	// nyata setelah bucket terakhir cuma dapat padTail detik -- kalau truk butuh lebih
+	// lama dari itu utk pergi dari zona, klip kepotong & AI Vision balikin load_condition
+	// "pending" (video_end) padahal truknya sebenarnya beres, cuma tidak tertangkap
+	// kameranya sampai selesai. padHead tetap kecil (start_ts sudah akurat, awal gali).
+	const padHead = 30 * time.Second
+	const padTail = 180 * time.Second
+	windowStart := start.In(jakarta).Add(-padHead)
+	windowEnd := end.In(jakarta).Add(padTail)
 
 	segs, err := listSegments(recordingsDir, cameraCode)
 	if err != nil {

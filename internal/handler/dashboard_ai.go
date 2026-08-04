@@ -23,11 +23,11 @@ type produktivitasExcavatorRow struct {
 	ExcavatorName string `json:"excavator_name"`
 	// VolumeM3/TruckIdentified -- basis AI Vision sejak 03 Agu 2026 (keputusan user:
 	// "dashboard produktivitas pakai AI Vision aja"), BUKAN lagi pengelompokan bucket.
-	// = jumlah truk berstatus completed/overloaded dari analisa AI Vision (auto MAUPUN
-	// manual, lihat ponytail-note di getAIVisionTruckCount -- manual SEMENTARA ikut
-	// dihitung supaya user bisa self-serve test dashboard tanpa dashcam asli) x kapasitas
-	// truk (standard_buckets/TRUCK_CAPACITY_M3). Cakupannya cuma siklus yang KEBETULAN
-	// sudah dianalisa AI Vision, bukan seluruh aktivitas -- lihat getAIVisionTruckCount.
+	// = jumlah truk berstatus completed/overloaded dari analisa AI Vision trigger_source
+	// 'auto' saja untuk excavator produksi (manual/halaman Analisa Video AI dikecualikan
+	// -- TAPI ikut dihitung untuk excavator is_test=true, lihat getAIVisionKPI) x
+	// kapasitas truk (standard_buckets/TRUCK_CAPACITY_M3). Cakupannya cuma siklus yang
+	// KEBETULAN sudah dianalisa AI Vision, bukan seluruh aktivitas -- lihat getAIVisionKPI.
 	VolumeM3        int `json:"volume_m3"`
 	TruckIdentified int `json:"truck_identified"`
 	// RevenueTercatat/EstimasiRevenue -- basis AI Vision sejak 04 Agu 2026 (keputusan
@@ -36,9 +36,11 @@ type produktivitasExcavatorRow struct {
 	// AI Vision -- lihat komentar getAIVisionKPI.
 	RevenueTercatat float64 `json:"revenue_tercatat"`
 	EstimasiRevenue float64 `json:"estimasi_revenue"`
-	// Sesuai/Underload/Overload/Pending -- basis bucket (TruckGroup), dipakai chart
-	// Overload Analysis & Log Aktivitas -- TIDAK ikut pindah ke AI Vision, beda concern
-	// dari Revenue di atas.
+	// Sesuai/Underload/Overload/Pending -- basis AI Vision sejak 04 Agu 2026 (sebelumnya
+	// basis bucket/TruckGroup, keputusan user: chart Overload Analysis konsisten dgn
+	// Revenue/Volume yg sudah AI Vision-based). Dipakai chart Overload Analysis &
+	// MiniStat di DetailExcavator. PendingBucketM3 TETAP basis bucket (lihat komentar di
+	// loop) -- itu volume mentah, beda concern dari 4 count di atas.
 	Sesuai          int `json:"sesuai"`
 	Underload       int `json:"underload"`
 	Overload        int `json:"overload"`
@@ -74,9 +76,11 @@ type produktivitasRevenueResp struct {
 }
 
 // ProduktivitasRevenue — "01 - Dashboard Produktivitas & Revenue" (AI Only), lihat
-// Dokumen_Penjelasan_Dashboard_AIMOC.pdf. Menghitung pengelompokan truk on-the-fly dari
-// bucket_events mentah (lihat internal/service/truck_grouping.go) -- TIDAK ada state
-// tersimpan selain event mentahnya sendiri, jadi selalu bisa direkonsiliasi ulang kalau
+// Dokumen_Penjelasan_Dashboard_AIMOC.pdf. KPI utama (Volume/Truk/Revenue/Unvalidated)
+// basis AI Vision (getAIVisionKPI). Log Aktivitas & chart Overload Analysis TETAP
+// menghitung pengelompokan truk on-the-fly dari bucket_events mentah (lihat
+// internal/service/truck_grouping.go) -- TIDAK ada state tersimpan selain event
+// mentahnya sendiri, jadi selalu bisa direkonsiliasi ulang kalau
 // parameter algoritma (standard_buckets, gap threshold) berubah.
 func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 	from := c.Query("from", "")
@@ -84,7 +88,7 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 	excavatorID := c.Query("excavator_id", "")
 
 	var excavators []domain.Excavator
-	excTx := h.DB.Model(&domain.Excavator{})
+	excTx := h.DB.Model(&domain.Excavator{}).Where("is_test = ?", isTestViewer(h.DB, c))
 	if excavatorID != "" {
 		excTx = excTx.Where("id = ?", excavatorID)
 	}
@@ -154,15 +158,10 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 			if g.IsIdentified() {
 				logRow.Revenue = revenuePerTruck
 			}
-			switch g.FillStatus {
-			case service.FillSesuai:
-				row.Sesuai++
-			case service.FillUnderload:
-				row.Underload++
-			case service.FillOverload:
-				row.Overload++
-			case service.FillPending:
-				row.Pending++
+			// PendingBucketM3 TETAP basis bucket (volume mentah menunggu terbentuk jadi
+			// truk) -- tidak ada padanan langsung di AI Vision, beda concern dari
+			// Sesuai/Underload/Overload/Pending di bawah (sekarang basis AI Vision).
+			if g.FillStatus == service.FillPending {
 				row.PendingBucketM3 += g.BucketCount
 			}
 			resp.LogAktivitas = append(resp.LogAktivitas, logRow)
@@ -170,11 +169,15 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 
 		// Basis AI VISION -- Volume/Truk/Revenue/Unvalidated Volume (keputusan user
 		// 03-04 Agu 2026, lihat komentar getAIVisionKPI).
-		aiKPI := h.getAIVisionKPI(exc.Code, from, to)
+		aiKPI := h.getAIVisionKPI(exc.Code, exc.IsTest, from, to)
 		row.TruckIdentified = aiKPI.TruckIdentified
 		row.VolumeM3 = row.TruckIdentified * standard
 		row.RevenueTercatat = float64(row.TruckIdentified) * revenuePerTruck
 		row.EstimasiRevenue = float64(row.TruckIdentified+aiKPI.PendingTrucks) * revenuePerTruck
+		row.Sesuai = aiKPI.Sesuai
+		row.Overload = aiKPI.Overload
+		row.Underload = aiKPI.Underfilled
+		row.Pending = aiKPI.Pending
 
 		resp.ProduktivitasLoadingM3 += row.VolumeM3
 		resp.TruckIdentified += row.TruckIdentified
@@ -195,11 +198,18 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 }
 
 // aiVisionKPIAgg — agregat dari dashboard_summary.kpi semua analisa AI Vision completed
-// milik 1 excavator dalam rentang tanggal. TruckIdentified = truk sudah final (sama
-// semantik dgn Sesuai+Overload versi bucket lama). PendingTrucks = truk yang AI Vision
-// lihat tapi BELUM final (pending/underfilled -- video berakhir duluan atau belum penuh)
-// -- dipakai basis EstimasiRevenue (proyeksi ceiling), bukan RevenueTercatat.
+// (trigger_source='auto' saja, lihat getAIVisionKPI) milik 1 excavator dalam rentang
+// tanggal. Sesuai/Overload/Underfilled/Pending = 4 kategori load_condition mentah dari
+// AI Vision, dipakai chart Overload Analysis. TruckIdentified = Sesuai+Overload (truk
+// final, sama semantik dgn Sesuai+Overload versi bucket lama). PendingTrucks =
+// Underfilled+Pending (truk yang AI Vision lihat tapi BELUM final -- video berakhir
+// duluan atau belum penuh) -- dipakai basis EstimasiRevenue (proyeksi ceiling), bukan
+// RevenueTercatat.
 type aiVisionKPIAgg struct {
+	Sesuai              int
+	Overload            int
+	Underfilled         int
+	Pending             int
 	TruckIdentified     int
 	PendingTrucks       int
 	UnvalidatedVolumeM3 int
@@ -215,13 +225,20 @@ type aiVisionKPIAgg struct {
 // (completed/overloaded/pending/underfilled) + unvalidated_volume_bucket, dikali rate
 // REVENUE_PER_TRUCK kita sendiri (getRevenuePerTruck, Settings kita) -- supaya revenue
 // tetap bisa diubah admin kapan saja tanpa bergantung ke sistem tim AI.
-// ponytail: SEMENTARA (permintaan user 03 Agu 2026) -- manual ikut dihitung juga (tanpa
-// filter trigger_source='auto') supaya user bisa self-serve cek dashboard lewat halaman
-// Analisa Video AI sendiri, tanpa dashcam asli/tanpa minta developer trigger webhook manual.
-// WAJIB kembalikan filter trigger_source='auto' sebelum dashcam asli live -- kalau tidak,
-// siapapun buka halaman Analisa Video AI bisa mencemari angka produksi dashboard.
-func (h *MiscHandler) getAIVisionKPI(unitCode, from, to string) aiVisionKPIAgg {
+// trigger_source='auto' SENGAJA difilter untuk excavator PRODUKSI (isTest=false) --
+// halaman Analisa Video AI (manual) tetap ruang uji coba model, bukan data produksi
+// (periode "manual ikut dihitung sementara", 03-04 Agu 2026, sudah berakhir seiring
+// finalisasi dashboard). TAPI untuk excavator is_test=true (unit demo/testing, lihat
+// migration 000031), manual JUSTRU ikut dihitung -- itu satu-satunya cara user demo
+// menguji dashboard-nya sendiri (dashboard-nya sudah terisolasi total dari data
+// produksi lewat is_test_viewer, jadi tidak ada risiko mencemari angka produksi lagi).
+func (h *MiscHandler) getAIVisionKPI(unitCode string, isTestExcavator bool, from, to string) aiVisionKPIAgg {
 	q := h.DB.Where("unit_id = ? AND status = 'completed'", unitCode)
+	if isTestExcavator {
+		q = q.Where("trigger_source IN ('auto', 'manual')")
+	} else {
+		q = q.Where("trigger_source = 'auto'")
+	}
 	if from != "" {
 		q = q.Where("submitted_at::date >= ?", from)
 	}
@@ -248,10 +265,14 @@ func (h *MiscHandler) getAIVisionKPI(unitCode, from, to string) aiVisionKPIAgg {
 		if err := json.Unmarshal([]byte(*r.DashboardSummary), &parsed); err != nil {
 			continue
 		}
-		agg.TruckIdentified += parsed.KPI.CompletedTruckLoads + parsed.KPI.OverloadedTruckLoads
-		agg.PendingTrucks += parsed.KPI.PendingTruckLoads + parsed.KPI.UnderfilledTruckLoads
+		agg.Sesuai += parsed.KPI.CompletedTruckLoads
+		agg.Overload += parsed.KPI.OverloadedTruckLoads
+		agg.Underfilled += parsed.KPI.UnderfilledTruckLoads
+		agg.Pending += parsed.KPI.PendingTruckLoads
 		agg.UnvalidatedVolumeM3 += parsed.KPI.UnvalidatedVolumeBucket
 	}
+	agg.TruckIdentified = agg.Sesuai + agg.Overload
+	agg.PendingTrucks = agg.Underfilled + agg.Pending
 	return agg
 }
 

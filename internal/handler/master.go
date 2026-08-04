@@ -93,7 +93,8 @@ func (h *MasterHandler) ListExcavators(c *fiber.Ctx) error {
 	q := c.Query("q", "")
 	// Camera ikut dimuat — dashboard butuh stream_url kamera tiap excavator untuk
 	// thumbnail live view di card excavator.
-	tx := h.DB.Model(&domain.Excavator{}).Preload("Camera")
+	tx := h.DB.Model(&domain.Excavator{}).Preload("Camera").
+		Where("is_test = ?", isTestViewer(h.DB, c))
 	if q != "" {
 		tx = tx.Where("name ILIKE ? OR code ILIKE ? OR brand ILIKE ?", "%"+q+"%", "%"+q+"%", "%"+q+"%")
 	}

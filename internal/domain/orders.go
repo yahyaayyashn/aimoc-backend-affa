@@ -30,6 +30,10 @@ type LoadingCycle struct {
 	// fail-safe saat live putus). Dipakai dashboard menandai "data dari rekaman".
 	Source            string    `gorm:"size:20;column:source;default:'live'" json:"source"`
 	CreatedAt         time.Time `json:"created_at"`
+	// AIVisionAnalysis -- relasi balik dari ai_vision_analyses.loading_cycle_id, dipakai
+	// Riwayat Aktivitas menampilkan status AI yang jujur (bukan badge "Analyzed" statis)
+	// -- lihat ListLoadingCycles.
+	AIVisionAnalysis *AIVisionAnalysis `gorm:"foreignKey:LoadingCycleID" json:"ai_vision_analysis,omitempty"`
 }
 
 func (LoadingCycle) TableName() string { return "loading_cycles" }

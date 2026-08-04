@@ -77,6 +77,12 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 	if err := h.DB.First(&exc, "id = ?", c.Params("id")).Error; err != nil {
 		return utils.NotFound(c, "Excavator tidak ditemukan")
 	}
+	// Isolasi dashboard demo/testing (lihat isTestViewer) -- excavator di luar scope
+	// user yang login dibalas 404 sama seperti tidak ada, jangan bocorkan bahwa ID-nya
+	// sebenarnya valid.
+	if exc.IsTest != isTestViewer(h.DB, c) {
+		return utils.NotFound(c, "Excavator tidak ditemukan")
+	}
 
 	var rows []domain.AIVisionAnalysis
 	h.DB.Where("unit_id = ? AND status = 'completed'", exc.Code).Find(&rows)

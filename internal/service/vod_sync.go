@@ -3,7 +3,6 @@ package service
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -138,28 +137,26 @@ func (s *VODSyncService) syncCamera(cam domain.Camera) {
 			zap.String("camera", cam.Code), zap.Int("count", fetched))
 	}
 
-	// Retensi sederhana: buang file rekaman lebih tua dari 24 jam supaya folder tidak
-	// membengkak (fail-safe hanya butuh rekaman terbaru).
-	s.pruneOld(dir, 24*time.Hour)
+	// Retensi sederhana: buang file rekaman lebih tua dari 72 jam supaya folder tidak
+	// membengkak (fail-safe butuh cadangan beberapa hari, bukan cuma beberapa jam --
+	// kalau dashcam offline lama, ini satu-satunya sumber yang tersisa untuk failover).
+	s.pruneOld(cam.Code, 72*time.Hour)
 }
 
-// pruneOld menghapus file .mp4 di dir yang lebih tua dari maxAge (berbasis mtime).
-func (s *VODSyncService) pruneOld(dir string, maxAge time.Duration) {
-	entries, err := os.ReadDir(dir)
+// pruneOld menghapus file rekaman kamera cameraCode yang lebih tua dari maxAge --
+// umur dihitung dari WAKTU REKAM ASLI (di-parse dari nama file via listSegments/
+// recordingFilenameRe, sama seperti ExtractClip), BUKAN dari mtime file di disk --
+// mtime cuma waktu download, bisa telat dari waktu rekam aslinya kalau sync sempat
+// tertunda, sehingga file yang sebenarnya sudah cukup lama tidak sengaja tersisa.
+func (s *VODSyncService) pruneOld(cameraCode string, maxAge time.Duration) {
+	segs, err := listSegments(s.RecordingsDir, cameraCode)
 	if err != nil {
 		return
 	}
 	cutoff := time.Now().Add(-maxAge)
-	for _, ent := range entries {
-		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".mp4") {
-			continue
-		}
-		info, err := ent.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, ent.Name()))
+	for _, seg := range segs {
+		if seg.TS.Before(cutoff) {
+			_ = os.Remove(seg.Path)
 		}
 	}
 }
