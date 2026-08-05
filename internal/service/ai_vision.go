@@ -148,6 +148,38 @@ func ExtractClip(recordingsDir, cameraCode string, start, end time.Time) (string
 	return outPath, nil
 }
 
+// extractClipWithRetry -- ExtractClip dengan retry. Trigger cycle-close selalu jalan
+// SEBELUM footage tail (padTail) selesai direkam+disinkron: idle_timeout (120s) <
+// padTail (180s) -> defisit struktural 60s di mana footage yang dibutuhkan belum
+// direkam sama sekali saat percobaan pertama, ditambah VOD sync yang cuma jalan tiap
+// VOD_SYNC_INTERVAL_SEC (300s default) -- worst case footage baru siap ~6 menit
+// setelah trigger. Tanpa retry, percobaan pertama SELALU gagal untuk siklus yang
+// ditutup reason=idle (mayoritas siklus). Retry tiap 30s sampai maxWait 8 menit
+// (margin di atas worst-case 60s+300s) sebelum benar-benar menyerah.
+func extractClipWithRetry(recordingsDir, cameraCode string, start, end time.Time) (string, error) {
+	return retryExtract(func() (string, error) {
+		return ExtractClip(recordingsDir, cameraCode, start, end)
+	}, 30*time.Second, 8*time.Minute)
+}
+
+// retryExtract -- mekanisme retry itu sendiri, dipisah dari extractClipWithRetry
+// supaya bisa diuji tanpa filesystem/ffmpeg sungguhan (lihat ai_vision_test.go).
+func retryExtract(extract func() (string, error), retryInterval, maxWait time.Duration) (string, error) {
+	deadline := time.Now().Add(maxWait)
+	var lastErr error
+	for {
+		clipPath, err := extract()
+		if err == nil {
+			return clipPath, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return "", lastErr
+		}
+		time.Sleep(retryInterval)
+	}
+}
+
 // prepareTestVideoClip -- untuk kamera video:// (simulasi/testing, mis. CAM-EXC-02
 // dipakai sebagai pengganti dashcam sementara). Tidak ada konsep "rekaman per-window-
 // waktu" seperti VOD dashcam asli -- satu-satunya sumber adalah file video test itu
@@ -279,7 +311,7 @@ func (s *AIVisionService) TriggerAsync(cycle domain.LoadingCycle) {
 		var err error
 		switch {
 		case strings.HasPrefix(cam.StreamURL, "blackvue://"):
-			clipPath, err = ExtractClip(s.RecordingsDir, cam.Code, cycle.StartTS, cycle.EndTS)
+			clipPath, err = extractClipWithRetry(s.RecordingsDir, cam.Code, cycle.StartTS, cycle.EndTS)
 		case strings.HasPrefix(cam.StreamURL, "video://"):
 			clipPath, err = prepareTestVideoClip(s.TestVideosDir, cam.StreamURL)
 		default:
