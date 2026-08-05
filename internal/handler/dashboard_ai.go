@@ -154,7 +154,9 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 				Unvalidated:   g.Unvalidated,
 			}
 			if g.IsIdentified() {
-				logRow.Revenue = revenuePerTruck
+				// Rate pada SAAT truk ini selesai (g.EndTS), bukan rate sekarang -- sama
+				// alasan dengan sumHistoricalRevenue di getAIVisionKPI.
+				logRow.Revenue = h.getRevenuePerTruckAt(g.EndTS)
 			}
 			// PendingBucketM3 TETAP basis bucket (volume mentah menunggu terbentuk jadi
 			// truk) -- tidak ada padanan langsung di AI Vision, beda concern dari
@@ -170,7 +172,12 @@ func (h *MiscHandler) ProduktivitasRevenue(c *fiber.Ctx) error {
 		aiKPI := h.getAIVisionKPI(exc.Code, exc.IsTest, from, to)
 		row.TruckIdentified = aiKPI.TruckIdentified
 		row.VolumeM3 = int(math.Round(aiKPI.ProductivityLoadingM3))
-		row.RevenueTercatat = float64(aiKPI.RevenueBearingTrucks) * revenuePerTruck
+		// RevenueTercatat -- sudah dihitung per-baris pakai rate historisnya masing-
+		// masing (lihat sumHistoricalRevenue), BUKAN count*rate-sekarang lagi.
+		row.RevenueTercatat = aiKPI.RevenueTercatat
+		// EstimasiRevenue tetap pakai rate SEKARANG -- ini proyeksi/ceiling truk yang
+		// belum final, wajar pakai asumsi harga hari ini (beda dari RevenueTercatat
+		// yang harus jadi fakta terkunci begitu truk selesai).
 		row.EstimasiRevenue = float64(aiKPI.RevenueBearingTrucks+aiKPI.PendingTrucks) * revenuePerTruck
 		row.Sesuai = aiKPI.Sesuai
 		row.Overload = aiKPI.Overload
@@ -224,6 +231,13 @@ type aiVisionKPIAgg struct {
 	PendingTrucks         int
 	ProductivityLoadingM3 float64
 	UnvalidatedVolumeM3   int
+	// RevenueTercatat -- SUDAH dalam Rupiah (bukan count lagi), dijumlah per-baris
+	// pakai rate yang berlaku SAAT baris itu selesai (getRevenuePerTruckAt, lihat
+	// getAIVisionKPI) -- BUKAN RevenueBearingTrucks * rate-sekarang. Kalau admin ubah
+	// REVENUE_PER_TRUCK hari ini, truk yang sudah selesai kemarin TETAP pakai rate
+	// kemarin (05 Agu 2026, keluhan tim: "harusnya cuma truk yang akan datang yang
+	// berubah").
+	RevenueTercatat float64
 }
 
 // getAIVisionKPI — dashboard Produktivitas & Revenue 100% basis AI Vision sejak 04 Agu
@@ -258,7 +272,42 @@ func (h *MiscHandler) getAIVisionKPI(unitCode string, isTestExcavator bool, from
 	}
 	var rows []domain.AIVisionAnalysis
 	q.Find(&rows)
-	return aggregateAIVisionKPI(rows)
+	agg := aggregateAIVisionKPI(rows)
+	agg.RevenueTercatat = h.sumHistoricalRevenue(rows)
+	return agg
+}
+
+// sumHistoricalRevenue -- terpisah dari aggregateAIVisionKPI (yang murni/tanpa DB,
+// lihat komentarnya) karena butuh getRevenuePerTruckAt (query DB). Setiap baris
+// dihitung pakai rate yang berlaku PERSIS saat baris itu selesai (FinishedAt, atau
+// SubmittedAt kalau belum ada FinishedAt), bukan 1 rate sekarang dikali total count --
+// itu yang bikin ganti harga hari ini diam-diam menghitung ulang revenue truk lama.
+func (h *MiscHandler) sumHistoricalRevenue(rows []domain.AIVisionAnalysis) float64 {
+	var total float64
+	for _, r := range rows {
+		if r.DashboardSummary == nil {
+			continue
+		}
+		var parsed struct {
+			KPI struct {
+				CompletedTruckLoads  int `json:"completed_truck_loads"`
+				OverloadedTruckLoads int `json:"overloaded_truck_loads"`
+			} `json:"kpi"`
+		}
+		if err := json.Unmarshal([]byte(*r.DashboardSummary), &parsed); err != nil {
+			continue
+		}
+		bearing := parsed.KPI.CompletedTruckLoads + parsed.KPI.OverloadedTruckLoads
+		if bearing == 0 {
+			continue
+		}
+		at := r.SubmittedAt
+		if r.FinishedAt != nil {
+			at = *r.FinishedAt
+		}
+		total += float64(bearing) * h.getRevenuePerTruckAt(at)
+	}
+	return total
 }
 
 // aggregateAIVisionKPI -- dipisah dari getAIVisionKPI supaya bisa diuji tanpa DB

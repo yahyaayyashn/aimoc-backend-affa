@@ -145,17 +145,24 @@ func (h *MiscHandler) getOperationalHours() operationalHours {
 // lebih basi dari ini (network putus / pipeline mati), bukan sekadar idle.
 const heartbeatOfflineThresholdSec = 90
 
-// getRevenuePerTruck — dulu hardcoded (const RevenuePerTruck), dipindah ke
-// system_settings (01 Agu 2026) supaya bisa diubah tanpa deploy ulang. Default tetap
-// Rp250.000 (keputusan tim 23 Jul 2026) kalau key belum pernah di-set.
+// getRevenuePerTruck — rate SEKARANG (baris revenue_rate_history terbaru). Dipakai
+// untuk hal yang belum "terjadi"/belum final (mis. proyeksi Estimasi Revenue truk
+// pending) -- BUKAN untuk menghitung ulang revenue truk yang SUDAH selesai, lihat
+// getRevenuePerTruckAt.
 func (h *MiscHandler) getRevenuePerTruck() float64 {
+	return h.getRevenuePerTruckAt(time.Now())
+}
+
+// getRevenuePerTruckAt — rate yang BERLAKU pada waktu t (05 Agu 2026, ganti dari
+// system_settings 1-nilai-ditimpa -- lihat migration 000032). WAJIB dipakai untuk
+// menghitung Revenue Tercatat truk yang sudah final: kalau admin ubah harga hari ini,
+// truk yang sudah selesai bulan lalu harus TETAP pakai rate yang berlaku waktu itu,
+// bukan rate baru (itu yang dilaporkan tim sebagai bug -- "harusnya cuma truk yang
+// akan datang yang berubah"). Default 250000 kalau tabel history kosong (belum pernah
+// di-migrate/di-seed).
+func (h *MiscHandler) getRevenuePerTruckAt(t time.Time) float64 {
 	v := 250000.0
-	var raw string
-	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'REVENUE_PER_TRUCK'`).Scan(&raw)
-	if raw == "" {
-		return v
-	}
-	_ = json.Unmarshal([]byte(raw), &v)
+	h.DB.Raw(`SELECT rate FROM revenue_rate_history WHERE effective_from <= ? ORDER BY effective_from DESC LIMIT 1`, t).Scan(&v)
 	if v <= 0 {
 		return 250000.0
 	}
@@ -487,6 +494,23 @@ func (h *MiscHandler) UpdateSettings(c *fiber.Ctx) error {
 		return utils.BadRequest(c, "Body tidak valid", nil)
 	}
 	key := c.Params("key")
+
+	// REVENUE_PER_TRUCK -- SENGAJA tidak sekedar ditimpa (05 Agu 2026, lihat
+	// getRevenuePerTruckAt/migration 000032). Rate baru dicatat sebagai baris BARU di
+	// revenue_rate_history (effective_from = sekarang), supaya truk yang sudah selesai
+	// SEBELUM perubahan ini tetap terhitung pakai rate lama -- cuma truk yang selesai
+	// SETELAH ini yang kena rate baru. system_settings tetap ikut di-upsert (di bawah)
+	// murni sebagai cache "nilai sekarang" buat ditampilkan di tabel Settings.
+	if key == "REVENUE_PER_TRUCK" {
+		var rate float64
+		if err := json.Unmarshal([]byte(body.Value), &rate); err != nil || rate <= 0 {
+			return utils.BadRequest(c, "Nilai harus angka positif", nil)
+		}
+		if err := h.DB.Exec(`INSERT INTO revenue_rate_history (rate, effective_from) VALUES (?, NOW())`, rate).Error; err != nil {
+			return utils.BadRequest(c, err.Error(), nil)
+		}
+	}
+
 	res := h.DB.Exec(`INSERT INTO system_settings (key, value_jsonb, description, updated_by, updated_at)
 		VALUES (?, ?::jsonb, ?, ?, NOW())
 		ON CONFLICT (key) DO UPDATE SET value_jsonb = EXCLUDED.value_jsonb,
