@@ -180,24 +180,6 @@ func (h *MiscHandler) getTruckGroupGapSec() int {
 	return v
 }
 
-// getTruckCapacityM3 — dulu hardcoded (fallback `10` di ProduktivitasRevenue), dipindah
-// ke system_settings (02 Agu 2026). Cuma dipakai kalau Excavator.StandardBuckets
-// per-unit kosong -- StandardBuckets tetap jadi override utama kalau sudah diisi admin
-// di Master Data.
-func (h *MiscHandler) getTruckCapacityM3() int {
-	v := 10
-	var raw string
-	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'TRUCK_CAPACITY_M3'`).Scan(&raw)
-	if raw == "" {
-		return v
-	}
-	_ = json.Unmarshal([]byte(raw), &v)
-	if v <= 0 {
-		return 10
-	}
-	return v
-}
-
 // DashboardManajemen — ringkasan aktivitas excavator hari ini, bersumber murni dari
 // loading_cycles (deteksi AI mandiri) + alerts + heartbeat kamera. Metrik transaksi
 // (revenue/truck/ton) sudah dibuang pada pivot AI-only. Headline: status real-time
