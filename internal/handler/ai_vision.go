@@ -88,13 +88,12 @@ func (h *AIVisionHandler) List(c *fiber.Ctx) error {
 }
 
 // ExcavatorSummary — GET /excavators/:id/ai-vision-summary, agregat durasi Mining vs
-// Loading dari SEMUA analisa AI Vision (auto + manual) yang statusnya completed untuk
-// excavator ini (dicocokkan lewat unit_id = Excavator.Code). Dipakai menggantikan
-// placeholder "belum tersedia" di DetailExcavator & card Klasifikasi Aktivitas di
-// Dashboard Produktivitas -- catatan penting: cakupannya cuma siklus yang KEBETULAN
-// sudah dianalisa AI Vision (otomatis per siklus >=20 detik, atau manual), BUKAN semua
-// aktivitas excavator ini -- FE wajib tampilkan ini sebagai cakupan parsial, bukan
-// total aktivitas.
+// Loading dari analisa AI Vision yang statusnya completed untuk excavator ini
+// (dicocokkan lewat unit_id = Excavator.Code). Dipakai menggantikan placeholder "belum
+// tersedia" di DetailExcavator & card Klasifikasi Aktivitas di Dashboard Produktivitas
+// -- catatan penting: cakupannya cuma siklus yang KEBETULAN sudah dianalisa AI Vision
+// (otomatis per siklus >=20 detik, atau manual), BUKAN semua aktivitas excavator ini --
+// FE wajib tampilkan ini sebagai cakupan parsial, bukan total aktivitas.
 func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 	var exc domain.Excavator
 	if err := h.DB.First(&exc, "id = ?", c.Params("id")).Error; err != nil {
@@ -107,8 +106,19 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 		return utils.NotFound(c, "Excavator tidak ditemukan")
 	}
 
+	// trigger_source discoping SAMA PERSIS dengan getAIVisionKPI (dashboard_ai.go,
+	// 05 Agu 2026) -- sebelumnya endpoint ini tidak filter trigger_source SAMA SEKALI,
+	// jadi excavator produksi (is_test=false) yang bahkan TIDAK punya kamera bisa
+	// nunjukkin data dari trigger manual test di halaman Analisa Video AI (dibuktikan
+	// nyata: excavator baru tanpa kamera menampilkan "1 cycle analyzed").
+	q := h.DB.Where("unit_id = ? AND status = 'completed'", exc.Code)
+	if exc.IsTest {
+		q = q.Where("trigger_source IN ('auto', 'manual')")
+	} else {
+		q = q.Where("trigger_source = 'auto'")
+	}
 	var rows []domain.AIVisionAnalysis
-	h.DB.Where("unit_id = ? AND status = 'completed'", exc.Code).Find(&rows)
+	q.Find(&rows)
 
 	// AI Vision sebenarnya kirim 4 kategori (mining/loading/idle/unknown) di
 	// activity.durations_seconds -- dulu cuma mining+loading yang diambil, idle/unknown
