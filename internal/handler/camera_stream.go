@@ -60,7 +60,7 @@ func resolveVideoFilePath(baseDir, streamURL string) (string, error) {
 //     aimoc-ai-service, satu konvensi URL dipakai di kedua sisi.
 func (h *CameraStreamHandler) Live(c *fiber.Ctx) error {
 	var cam domain.Camera
-	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, cam.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 
@@ -121,7 +121,7 @@ func (h *CameraStreamHandler) Live(c *fiber.Ctx) error {
 // ulang capture SAAT INI tanpa mengubah mode sama sekali.
 func (h *CameraStreamHandler) RestartVideo(c *fiber.Ctx) error {
 	var cam domain.Camera
-	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, cam.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 	if !strings.HasPrefix(cam.StreamURL, "video://") {
@@ -148,7 +148,7 @@ func (h *CameraStreamHandler) RestartVideo(c *fiber.Ctx) error {
 // debug listener :8090 langsung.
 func (h *CameraStreamHandler) VideoStatus(c *fiber.Ctx) error {
 	var cam domain.Camera
-	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, cam.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 	if !strings.HasPrefix(cam.StreamURL, "video://") {
@@ -207,7 +207,7 @@ func resolveRecordingPath(recordingsDir, cameraCode, filename string) (string, e
 // atau diunduh -- TANPA autoplay, murni klik-kontrol user (lihat RecordingFile).
 func (h *CameraStreamHandler) Recordings(c *fiber.Ctx) error {
 	var cam domain.Camera
-	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, cam.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 	date := c.Query("date", "") // YYYY-MM-DD
@@ -266,7 +266,7 @@ func (h *CameraStreamHandler) Recordings(c *fiber.Ctx) error {
 // user eksplisit klik putar/download (lihat rencana "Kamera & Rekaman").
 func (h *CameraStreamHandler) RecordingFile(c *fiber.Ctx) error {
 	var cam domain.Camera
-	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&cam, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, cam.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 	path, err := resolveRecordingPath(h.RecordingsDir, cam.Code, c.Params("filename"))

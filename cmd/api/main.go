@@ -76,7 +76,7 @@ func main() {
 	miscH := handler.NewMiscHandler(db)
 	uploadH := handler.NewUploadHandler(cfg.UploadDir)
 	camStreamH := handler.NewCameraStreamHandler(db, cfg.TestVideosDir, cfg.AIServiceDebugURL, cfg.RecordingsDir)
-	incidentH := handler.NewCameraIncidentHandler(service.NewCameraIncidentService(db))
+	incidentH := handler.NewCameraIncidentHandler(db, service.NewCameraIncidentService(db))
 	aiVisionH := handler.NewAIVisionHandler(db, aiVisionSvc, aiVisionClient, cfg.TestVideosDir, cfg.UploadDir)
 
 	app := fiber.New(fiber.Config{

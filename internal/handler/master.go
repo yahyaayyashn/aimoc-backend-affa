@@ -41,13 +41,20 @@ func notifyMaster(eventType, action string, data interface{}) {
 
 // ============== CAMERAS ==============
 
+// ListCameras -- difilter is_test (05 Agu 2026, lihat isTestViewer & cameraInScope).
+// Kamera tidak punya kolom is_test sendiri, ikut excavator yang memakainya lewat LEFT
+// JOIN excavators.camera_id -- kamera yang belum terhubung excavator manapun dianggap
+// scope PRODUKSI (COALESCE ke false), bukan otomatis lolos ke semua viewer.
 func (h *MasterHandler) ListCameras(c *fiber.Ctx) error {
 	var data []domain.Camera
 	p := utils.GetPagination(c)
-	tx := h.DB.Model(&domain.Camera{})
+	tx := h.DB.Table("cameras").
+		Joins("LEFT JOIN excavators ON excavators.camera_id = cameras.id").
+		Where("COALESCE(excavators.is_test, false) = ?", isTestViewer(h.DB, c))
 	var total int64
-	tx.Count(&total)
-	tx.Limit(p.PerPage).Offset(p.Offset).Order("code ASC").Find(&data)
+	tx.Session(&gorm.Session{}).Count(&total)
+	tx.Session(&gorm.Session{}).Select("cameras.*").
+		Limit(p.PerPage).Offset(p.Offset).Order("cameras.code ASC").Find(&data)
 	return utils.OKMeta(c, "OK", data, utils.MakeMeta(p, total))
 }
 
@@ -68,7 +75,7 @@ func (h *MasterHandler) CreateCamera(c *fiber.Ctx) error {
 
 func (h *MasterHandler) UpdateCamera(c *fiber.Ctx) error {
 	var x domain.Camera
-	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil || !cameraInScope(h.DB, c, x.ID) {
 		return utils.NotFound(c, "Kamera tidak ditemukan")
 	}
 	if err := c.BodyParser(&x); err != nil {
@@ -80,8 +87,12 @@ func (h *MasterHandler) UpdateCamera(c *fiber.Ctx) error {
 }
 
 func (h *MasterHandler) DeleteCamera(c *fiber.Ctx) error {
-	h.DB.Delete(&domain.Camera{}, "id = ?", c.Params("id"))
-	notifyMaster("CAMERA_CHANGED", "delete", fiber.Map{"id": c.Params("id")})
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil || !cameraInScope(h.DB, c, id) {
+		return utils.NotFound(c, "Kamera tidak ditemukan")
+	}
+	h.DB.Delete(&domain.Camera{}, "id = ?", id)
+	notifyMaster("CAMERA_CHANGED", "delete", fiber.Map{"id": id})
 	return utils.OK(c, "Kamera dihapus", nil)
 }
 
@@ -137,6 +148,10 @@ func (h *MasterHandler) CreateExcavator(c *fiber.Ctx) error {
 	if x.Status == "" {
 		x.Status = "AKTIF"
 	}
+	// is_test SELALU ikut scope user yang login, BUKAN dari body client (05 Agu 2026) --
+	// supaya excavator baru otomatis nongol di dashboard SI PEMBUAT, tidak diam-diam
+	// bocor ke scope lain (lihat isTestViewer).
+	x.IsTest = isTestViewer(h.DB, c)
 	if err := h.checkCameraNotTaken(x.CameraID, uuid.Nil); err != nil {
 		return utils.BadRequest(c, err.Error(), nil)
 	}
@@ -149,15 +164,19 @@ func (h *MasterHandler) CreateExcavator(c *fiber.Ctx) error {
 
 func (h *MasterHandler) UpdateExcavator(c *fiber.Ctx) error {
 	var x domain.Excavator
-	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil || x.IsTest != isTestViewer(h.DB, c) {
 		return utils.NotFound(c, "Excavator tidak ditemukan")
 	}
+	originalIsTest := x.IsTest
 	// camera_id:"" tidak bisa di-parse ke *uuid.UUID — normalisasi ke null supaya
 	// MENGOSONGKAN kamera tidak gagal "Body tidak valid".
 	body := bytes.ReplaceAll(c.Body(), []byte(`"camera_id":""`), []byte(`"camera_id":null`))
 	if err := json.Unmarshal(body, &x); err != nil {
 		return utils.BadRequest(c, "Body tidak valid", nil)
 	}
+	// is_test bukan field yang bisa diubah lewat form Master Data (tidak ada di UI) --
+	// pertahankan nilai asli, jangan biarkan body request menimpanya.
+	x.IsTest = originalIsTest
 	if err := h.checkCameraNotTaken(x.CameraID, x.ID); err != nil {
 		return utils.BadRequest(c, err.Error(), nil)
 	}
@@ -171,6 +190,10 @@ func (h *MasterHandler) UpdateExcavator(c *fiber.Ctx) error {
 }
 
 func (h *MasterHandler) DeleteExcavator(c *fiber.Ctx) error {
+	var x domain.Excavator
+	if err := h.DB.First(&x, "id = ?", c.Params("id")).Error; err != nil || x.IsTest != isTestViewer(h.DB, c) {
+		return utils.NotFound(c, "Excavator tidak ditemukan")
+	}
 	if err := h.DB.Delete(&domain.Excavator{}, "id = ?", c.Params("id")).Error; err != nil {
 		return utils.BadRequest(c, err.Error(), nil)
 	}

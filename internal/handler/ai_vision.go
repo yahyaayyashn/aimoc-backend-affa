@@ -31,6 +31,21 @@ func NewAIVisionHandler(db *gorm.DB, svc *service.AIVisionService, client *aivis
 	return &AIVisionHandler{DB: db, Svc: svc, Client: client, TestVideosDir: testVideosDir, UploadDir: uploadDir}
 }
 
+// aiVisionRowInScope — isolasi dashboard demo/testing (lihat isTestViewer) untuk
+// endpoint AI Vision yang akses per-baris (Get/Video/GetByLoadingCycle). unit_id di
+// ai_vision_analyses SELALU kode excavator (lihat AIVisionService.TriggerAsync &
+// AnalisaVideoAI.tsx yang selalu kirim Excavator.Code, bukan Camera.Code) -- jadi
+// tinggal join balik ke excavators.code buat tahu is_test-nya. Excavator yang sudah
+// dihapus (unit_id tidak match manapun) dianggap TIDAK dalam scope siapapun, lebih
+// aman ditolak daripada bocor.
+func aiVisionRowInScope(db *gorm.DB, c *fiber.Ctx, unitID string) bool {
+	var exc domain.Excavator
+	if err := db.Select("is_test").First(&exc, "code = ?", unitID).Error; err != nil {
+		return false
+	}
+	return exc.IsTest == isTestViewer(db, c)
+}
+
 // GetByLoadingCycle — GET /loading-cycles/:id/ai-vision. 404 kalau belum pernah dipicu
 // (siklus terlalu pendek, AI_VISION_ENABLED=false, atau memang belum diproses) --
 // bukan error, FE tampilkan "tidak ada analisa lanjutan".
@@ -38,7 +53,7 @@ func (h *AIVisionHandler) GetByLoadingCycle(c *fiber.Ctx) error {
 	var row domain.AIVisionAnalysis
 	err := h.DB.Where("loading_cycle_id = ?", c.Params("id")).
 		Order("submitted_at DESC").First(&row).Error
-	if err != nil {
+	if err != nil || !aiVisionRowInScope(h.DB, c, row.UnitID) {
 		return utils.NotFound(c, "Belum ada analisa AI Vision untuk siklus ini")
 	}
 	return utils.OK(c, "OK", row)
@@ -47,20 +62,28 @@ func (h *AIVisionHandler) GetByLoadingCycle(c *fiber.Ctx) error {
 // Get — GET /ai-vision/:id, dipakai jalur manual (tidak selalu ada loading_cycle_id).
 func (h *AIVisionHandler) Get(c *fiber.Ctx) error {
 	var row domain.AIVisionAnalysis
-	if err := h.DB.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&row, "id = ?", c.Params("id")).Error; err != nil || !aiVisionRowInScope(h.DB, c, row.UnitID) {
 		return utils.NotFound(c, "Analisa tidak ditemukan")
 	}
 	return utils.OK(c, "OK", row)
 }
 
 // List — GET /ai-vision, riwayat analisa (auto + manual), dipakai halaman Analisa Video
-// AI dan bisa juga untuk audit umum.
+// AI dan bisa juga untuk audit umum. Difilter is_test (05 Agu 2026 -- sebelumnya BOCOR,
+// endpoint ini kelewat waktu isolasi demo/produksi dibuat, admin sempat lihat data test
+// EXC-PC200-1 di halaman Analisa Video AI).
 func (h *AIVisionHandler) List(c *fiber.Ctx) error {
 	p := utils.GetPagination(c)
+	// ai_vision_analyses & excavators sama-sama punya kolom id/status -- Select eksplisit
+	// wajib di query Find (bukan cuma Count) supaya tidak SELECT * ambigu ketupel-JOIN.
+	scope := h.DB.Table("ai_vision_analyses").
+		Joins("JOIN excavators ON excavators.code = ai_vision_analyses.unit_id").
+		Where("excavators.is_test = ?", isTestViewer(h.DB, c))
 	var total int64
-	h.DB.Model(&domain.AIVisionAnalysis{}).Count(&total)
+	scope.Session(&gorm.Session{}).Count(&total)
 	var rows []domain.AIVisionAnalysis
-	h.DB.Order("submitted_at DESC").Limit(p.PerPage).Offset(p.Offset).Find(&rows)
+	scope.Session(&gorm.Session{}).Select("ai_vision_analyses.*").
+		Order("submitted_at DESC").Limit(p.PerPage).Offset(p.Offset).Find(&rows)
 	return utils.OKMeta(c, "OK", rows, utils.MakeMeta(p, total))
 }
 
@@ -126,7 +149,7 @@ func (h *AIVisionHandler) ExcavatorSummary(c *fiber.Ctx) error {
 // mp4 utuh, bukan multipart chunked).
 func (h *AIVisionHandler) Video(c *fiber.Ctx) error {
 	var row domain.AIVisionAnalysis
-	if err := h.DB.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+	if err := h.DB.First(&row, "id = ?", c.Params("id")).Error; err != nil || !aiVisionRowInScope(h.DB, c, row.UnitID) {
 		return utils.NotFound(c, "Analisa tidak ditemukan")
 	}
 	if row.Status != "completed" || row.ExternalJobID == "" || row.AnnotatedVideoPath == "" {

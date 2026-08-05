@@ -344,6 +344,11 @@ func (h *MiscHandler) LoadingCycleBuckets(c *fiber.Ctx) error {
 	if err := h.DB.First(&exc, "id = ?", *cycle.ExcavatorID).Error; err != nil {
 		return utils.BadRequest(c, err.Error(), nil)
 	}
+	// Isolasi dashboard demo/testing (lihat isTestViewer) -- siklus milik excavator di
+	// luar scope user yang login dibalas 404, sama pola dengan AIVisionHandler.
+	if exc.IsTest != isTestViewer(h.DB, c) {
+		return utils.NotFound(c, "Siklus tidak ditemukan")
+	}
 
 	pad := 60 * time.Second
 	var events []domain.BucketEvent
