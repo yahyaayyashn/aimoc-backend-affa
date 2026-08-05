@@ -176,3 +176,27 @@ func (s *AuthService) Me(id uuid.UUID) (*domain.User, error) {
 	}
 	return &u, nil
 }
+
+// UpdateMe -- profil self-service (05 Agu 2026, sebelumnya Profile.tsx 100% read-only,
+// satu-satunya jalur edit user adalah PUT /users/:id yang SUPER_ADMIN-only). Field yang
+// boleh diubah SENGAJA dibatasi ke yang murni personal (nama/telepon/foto) -- role,
+// email, status, excavator_id, is_test_viewer TIDAK bisa lewat sini, harus tetap lewat
+// Master User (admin-only), supaya user tidak bisa naikkan privilege/ubah scope sendiri.
+func (s *AuthService) UpdateMe(id uuid.UUID, fullName, phone, avatarURL *string) (*domain.User, error) {
+	updates := map[string]interface{}{}
+	if fullName != nil {
+		updates["full_name"] = *fullName
+	}
+	if phone != nil {
+		updates["phone"] = *phone
+	}
+	if avatarURL != nil {
+		updates["avatar_url"] = *avatarURL
+	}
+	if len(updates) > 0 {
+		if err := s.DB.Model(&domain.User{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+	return s.Me(id)
+}

@@ -116,6 +116,7 @@ func main() {
 	v1.Post("/auth/refresh", authH.Refresh)
 	v1.Post("/auth/logout", authH.Logout)
 	v1.Get("/auth/me", middleware.AuthRequired(jwtSvc), authH.Me)
+	v1.Put("/auth/me", middleware.AuthRequired(jwtSvc), authH.UpdateMe)
 
 	// ============== CCTV AI Receiver (Webhook) ==============
 	// Hanya yang dipakai AI service versi AI-only: daftar kamera untuk dipoll +

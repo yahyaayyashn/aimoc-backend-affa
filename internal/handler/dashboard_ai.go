@@ -363,7 +363,7 @@ func (h *MiscHandler) LoadingCycleBuckets(c *fiber.Ctx) error {
 
 	standard := exc.StandardBuckets
 	if standard <= 0 {
-		standard = 10
+		standard = h.getTruckCapacityM3()
 	}
 	groups := service.ComputeTruckGroups(events, standard, h.getTruckGroupGapSec(), time.Now())
 

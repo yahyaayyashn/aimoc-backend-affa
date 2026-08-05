@@ -74,3 +74,27 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	}
 	return utils.OK(c, "OK", u)
 }
+
+type updateMeReq struct {
+	FullName  *string `json:"full_name"`
+	Phone     *string `json:"phone"`
+	AvatarURL *string `json:"avatar_url"`
+}
+
+// UpdateMe — PUT /auth/me, profil self-service (siapa saja yang login, bukan cuma
+// SUPER_ADMIN) -- lihat komentar AuthService.UpdateMe soal field yang sengaja dibatasi.
+func (h *AuthHandler) UpdateMe(c *fiber.Ctx) error {
+	uid, ok := c.Locals(middleware.CtxUserID).(uuid.UUID)
+	if !ok {
+		return utils.Unauthorized(c, "Sesi tidak valid")
+	}
+	var req updateMeReq
+	if err := c.BodyParser(&req); err != nil {
+		return utils.BadRequest(c, "Body tidak valid", nil)
+	}
+	u, err := h.Svc.UpdateMe(uid, req.FullName, req.Phone, req.AvatarURL)
+	if err != nil {
+		return utils.BadRequest(c, err.Error(), nil)
+	}
+	return utils.OK(c, "Profil diperbarui", u)
+}

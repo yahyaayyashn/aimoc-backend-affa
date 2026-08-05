@@ -18,12 +18,13 @@ type UploadHandler struct {
 
 func NewUploadHandler(dir string) *UploadHandler { return &UploadHandler{Dir: dir} }
 
+// allowedImageExt -- dipersempit ke jpg/png saja (05 Agu 2026, keputusan tim: cukup
+// 2 format paling umum, sisanya sengaja tidak didukung). Pesan error & caption FE
+// (ImageUpload.tsx) harus selalu selaras dengan daftar ini.
 var allowedImageExt = map[string]bool{
 	".jpg":  true,
 	".jpeg": true,
 	".png":  true,
-	".webp": true,
-	".gif":  true,
 }
 
 // sanitizeFolder hanya mengizinkan huruf kecil, angka, dash, underscore (mencegah path traversal).
@@ -52,7 +53,7 @@ func (h *UploadHandler) UploadImage(c *fiber.Ctx) error {
 	}
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if !allowedImageExt[ext] {
-		return utils.BadRequest(c, "Format gambar tidak didukung. Gunakan jpg, png, webp, atau gif", nil)
+		return utils.BadRequest(c, "Format gambar tidak didukung. Gunakan jpg atau png", nil)
 	}
 	if fileHeader.Size > 5*1024*1024 {
 		return utils.BadRequest(c, "Ukuran gambar maksimal 5MB", nil)

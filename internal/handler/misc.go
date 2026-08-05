@@ -180,6 +180,27 @@ func (h *MiscHandler) getTruckGroupGapSec() int {
 	return v
 }
 
+// getTruckCapacityM3 -- fallback kapasitas truk (m3) kalau Excavator.StandardBuckets
+// per-unit kosong. Sempat jadi dead code (05 Agu 2026, tidak ada caller lagi setelah
+// ProduktivitasRevenue pindah basis ke AI Vision) tapi disambung ulang ke
+// LoadingCycleBuckets (dashboard_ai.go) yang sebelumnya hardcode fallback `10` --
+// system_settings TRUCK_CAPACITY_M3 tetap berguna & masih ditampilkan di halaman
+// Settings, jangan dibiarkan jadi setting yang kelihatan bisa diubah tapi diam-diam
+// tidak ngaruh kemana-mana.
+func (h *MiscHandler) getTruckCapacityM3() int {
+	v := 10
+	var raw string
+	h.DB.Raw(`SELECT value_jsonb::text FROM system_settings WHERE key = 'TRUCK_CAPACITY_M3'`).Scan(&raw)
+	if raw == "" {
+		return v
+	}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v <= 0 {
+		return 10
+	}
+	return v
+}
+
 // DashboardManajemen — ringkasan aktivitas excavator hari ini, bersumber murni dari
 // loading_cycles (deteksi AI mandiri) + alerts + heartbeat kamera. Metrik transaksi
 // (revenue/truck/ton) sudah dibuang pada pivot AI-only. Headline: status real-time
